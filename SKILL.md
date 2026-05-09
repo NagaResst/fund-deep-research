@@ -661,7 +661,7 @@ python skills/fund-deep-research/scripts/policy_match.py <行业数据>
 
 ### 保存路径
 ```
-日常工作流/投资/基金研究报告/
+基金研究报告/
 ```
 
 ### 报告格式
