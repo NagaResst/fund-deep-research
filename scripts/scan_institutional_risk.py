@@ -34,12 +34,29 @@ def main():
     if len(sys.argv) < 3:
         print(json.dumps({"error": True, "message": "请提供基金经理姓名和基金公司名称"}, ensure_ascii=False))
         sys.exit(1)
-    
+
     manager_name = sys.argv[1]
     company_name = sys.argv[2]
-    
+
+    # 解析 --output 参数
+    output_path = None
+    raw_args = sys.argv[3:]
+    for i, arg in enumerate(raw_args):
+        if arg == '--output' and i + 1 < len(raw_args):
+            output_path = raw_args[i + 1]
+            break
+
     result = search_risk_signals(manager_name, company_name)
-    print(json.dumps(result, ensure_ascii=False, indent=2))
+    output_str = json.dumps(result, ensure_ascii=False, indent=2)
+
+    if output_path:
+        import os
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        with open(output_path, 'w', encoding='utf-8') as f:
+            f.write(output_str)
+        print(f"[OK] 已保存到 {output_path}", file=sys.stderr)
+    else:
+        print(output_str)
 
 if __name__ == "__main__":
     main()

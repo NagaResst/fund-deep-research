@@ -43,8 +43,40 @@ class EnhancedFundFetcher:
         
         # 4. 从档案页面获取风险等级
         self._fetch_risk_level()
+
+        # 5. 获取最新日度净值（取 lsjz 第一页第一条，无额外翻页）
+        self._fetch_latest_nav()
         
         return self.result
+
+    def _fetch_latest_nav(self):
+        """从 lsjz 接口获取最新一条日度净值"""
+        try:
+            url = (f"https://api.fund.eastmoney.com/f10/lsjz"
+                   f"?fundCode={self.fund_code}&pageIndex=1&pageSize=1"
+                   f"&startDate=2000-01-01&endDate=2099-12-31")
+            nav_headers = {
+                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
+                'Referer': 'https://fundf10.eastmoney.com/'
+            }
+            resp = requests.get(url, headers=nav_headers, timeout=10)
+            data = resp.json()
+            records = (data.get('Data') or {}).get('LSJZList') or []
+            if records:
+                r = records[0]
+                nav_val = r.get('DWJZ') or r.get('LJJZ') or ''
+                try:
+                    self.result['current_nav'] = float(nav_val)
+                except (ValueError, TypeError):
+                    self.result['current_nav'] = None
+                self.result['current_nav_date'] = r.get('FSRQ', '')
+                acc_val = r.get('LJJZ') or r.get('DWJZ') or ''
+                try:
+                    self.result['current_acc_nav'] = float(acc_val)
+                except (ValueError, TypeError):
+                    self.result['current_acc_nav'] = None
+        except Exception as e:
+            print(f"[WARN] _fetch_latest_nav failed: {e}", file=sys.stderr)
     
     def _fetch_from_f10_page(self):
         """从F10概况页面获取基础信息"""
@@ -168,48 +200,49 @@ class EnhancedFundFetcher:
                 self.result["custodian_fee"] = fee_match.group(1) + "%"
     
     def _fetch_performance_data(self):
-        """从业绩页面获取历史收益率（使用API）"""
+        """从移动端 API 获取各阶段收益率及排名（原 JJYJ 接口已失效）"""
+        # title 字段含义：Z=近1周, Y=近1月, 3Y=近3月, 6Y=近6月,
+        #                  1N=近1年, 2N=近2年, 3N=近3年, 5N=近5年,
+        #                  JN=今年来, LN=成立来
+        TITLE_MAP = {
+            'Z':  'return_1w',
+            'Y':  'return_1m',
+            '3Y': 'return_3m',
+            '6Y': 'return_6m',
+            '1N': 'return_1y',
+            '2N': 'return_2y',
+            '3N': 'return_3y',
+            '5N': 'return_5y',
+            'JN': 'return_ytd',
+            'LN': 'return_since_inception',
+        }
         try:
-            # 使用天天基金API获取阶段涨幅
-            url = f"http://api.fund.eastmoney.com/f10/JJYJ?fundCode={self.fund_code}"
-            response = requests.get(url, headers=self.headers, timeout=15)
-            
-            if response.status_code == 200:
-                data = response.json()
-                if data and isinstance(data, dict) and data.get('Data'):
-                    perf_data = data['Data']
-                    self.result["data_sources"].append("eastmoney_api_performance")
-                    
-                    # 提取各阶段收益率
-                    if perf_data.get('SYL'):
-                        syl = perf_data['SYL']
-                        if syl.get('Y'):  # 近1月
-                            self.result["return_1m"] = f"{syl['Y']}%"
-                        if syl.get('3Y'):  # 近3月
-                            self.result["return_3m"] = f"{syl['3Y']}%"
-                        if syl.get('6Y'):  # 近6月
-                            self.result["return_6m"] = f"{syl['6Y']}%"
-                        if syl.get('1N'):  # 近1年
-                            self.result["return_1y"] = f"{syl['1N']}%"
-                        if syl.get('2N'):  # 近2年
-                            self.result["return_2y"] = f"{syl['2N']}%"
-                        if syl.get('3N'):  # 近3年
-                            self.result["return_3y"] = f"{syl['3N']}%"
-                        if syl.get('JN'):  # 今年来
-                            self.result["return_ytd"] = f"{syl['JN']}%"
-                        if syl.get('LN'):  # 成立来
-                            self.result["return_since_inception"] = f"{syl['LN']}%"
-                    
-                    # 提取排名信息
-                    if perf_data.get('Rank'):
-                        rank_data = perf_data['Rank']
-                        if rank_data.get('1N'):
-                            self.result["rank_1y"] = rank_data['1N']
-                            
+            url = ("https://fundmobapi.eastmoney.com/FundMNewApi/FundMNPeriodIncrease"
+                   f"?FCODE={self.fund_code}&deviceid=x&plat=Android&product=EFund&version=1")
+            mobile_headers = {'User-Agent': 'Mozilla/5.0 (Linux; Android 12; Pixel 6) AppleWebKit/537.36 Mobile Safari/537.36'}
+            resp = requests.get(url, headers=mobile_headers, timeout=15)
+            data = resp.json()
+            items = data.get('Datas') or []
+            for item in items:
+                title = item.get('title', '')
+                syl   = item.get('syl', '')
+                rank  = item.get('rank', '')
+                sc    = item.get('sc', '')      # 同类总数
+                avg   = item.get('avg', '')     # 同类平均
+                hs300 = item.get('hs300', '')   # 沪深300
+                key = TITLE_MAP.get(title)
+                if key and syl not in ('', None):
+                    self.result[key] = f"{syl}%"
+                    if rank:
+                        self.result[f"{key}_rank"] = f"{rank}/{sc}"
+                    if avg:
+                        self.result[f"{key}_peer_avg"] = f"{avg}%"
+                    if hs300:
+                        self.result[f"{key}_hs300"] = f"{hs300}%"
+            if items:
+                self.result['data_sources'].append('eastmoney_mobile_api_performance')
         except Exception as e:
             print(f"业绩数据API获取失败: {e}")
-            # API失败时尝试HTML解析（备用方案）
-            self._fetch_performance_from_html()
     
     def _fetch_performance_from_html(self):
         """从HTML页面解析业绩数据（备用方案）"""
@@ -278,30 +311,9 @@ class EnhancedFundFetcher:
             print(f"档案数据抓取失败: {e}")
     
     def _fetch_risk_level(self):
-        """从基金详情页面获取风险等级"""
-        try:
-            # 尝试从天天基金API获取
-            url = f"http://api.fund.eastmoney.com/f10/JBGK?fundCode={self.fund_code}"
-            response = requests.get(url, headers=self.headers, timeout=10)
-            
-            if response.status_code == 200:
-                data = response.json()
-                if data and isinstance(data, dict) and data.get('Data'):
-                    fund_info = data['Data']
-                    
-                    # 风险等级
-                    if fund_info.get('RISKLEVEL'):
-                        self.result["risk_level"] = fund_info['RISKLEVEL']
-                        self.result["data_sources"].append("eastmoney_api")
-                    
-                    # 如果API没有返回，尝试从HTML页面解析
-                    if 'risk_level' not in self.result:
-                        self._fetch_risk_from_html()
-                        
-        except Exception as e:
-            print(f"风险等级API获取失败: {e}")
-            # API失败时尝试HTML解析
-            self._fetch_risk_from_html()
+        """从基金详情页 fund.eastmoney.com 解析风险等级"""
+        # JBGK 私有 API 已失效，改用详情页 HTML
+        self._fetch_risk_from_html()
     
     def _fetch_risk_from_html(self):
         """从HTML页面解析风险等级"""
