@@ -90,6 +90,7 @@ fund-deep-research/
 │   ├── ak_nav_history.py          # 日度净值历史
 │   ├── ak_holdings.py             # 持仓结构+行业配置
 │   ├── ak_quarterly_calc.py       # 季度业绩计算
+|   ├── akshare_data_fetcher.py    # 数据拉取核心模块
 │   ├── calc_risk_metrics.py       # 风险指标计算（13项）
 │   ├── calc_relative_metrics.py   # 相对基准指标（新增：Beta/Alpha等）
 │   ├── calc_inflection_points.py  # 拐点识别

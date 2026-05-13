@@ -48,12 +48,15 @@ def check_stale_files(tmp_dir: str) -> list[str]:
     required = [
         "fund_enhanced.json",
         "risk_metrics.json",
+        "relative_metrics.json",
         "holdings.json",
         "quarterly.json",
         "institutional_risk.json",
         "manager_info.json",
         "blacklist.json",
         "nav_daily.json",
+        "inflection_points.json",
+        "annual_returns.json",
     ]
     missing = []
     for f in required:
@@ -152,9 +155,10 @@ def main():
     print()
     print(f"─── 文件状态总览 ({tmp_dir}/raw/) ───")
     required_files = [
-        "fund_enhanced.json", "risk_metrics.json", "holdings.json",
-        "quarterly.json", "institutional_risk.json", "manager_info.json",
-        "blacklist.json", "nav_daily.json",
+        "fund_enhanced.json", "risk_metrics.json", "relative_metrics.json",
+        "holdings.json", "quarterly.json", "institutional_risk.json",
+        "manager_info.json", "blacklist.json", "nav_daily.json",
+        "inflection_points.json", "annual_returns.json",
     ]
     for fname in required_files:
         path = f"{tmp_dir}/raw/{fname}"

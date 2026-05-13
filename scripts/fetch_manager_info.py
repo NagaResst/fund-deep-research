@@ -101,13 +101,16 @@ def _fetch_akshare_manager_info(fund_code: str) -> dict:
             else:
                 result["years_of_experience"] = None
             
-            # 提取在管基金列表
-            result["managed_funds_list"] = same_manager[['现任基金代码', '现任基金']].to_dict('records')
-            
-            # 最佳回报
+            # 提取在管基金列表（仅保留代码和名称，任职回报/排名由 eastmoney 详情页补充）
+            result["managed_funds_list"] = [
+                {"fund_code": r["现任基金代码"], "fund_name": r["现任基金"]}
+                for _, r in same_manager.iterrows()
+            ]
+
+            # 最佳回报（经理级别整体指标，非单只基金数据）
             best_return = manager_row.get('现任基金最佳回报')
             if best_return and pd.notna(best_return):
-                result["best_return"] = f"{float(best_return)}%"
+                result["manager_best_return"] = f"{float(best_return)}%"
         
         print(f"[INFO] AKShare成功获取经理信息: {result.get('manager_name')}, 在管{result.get('current_fund_count')}只基金", file=sys.stderr)
         return result
@@ -191,6 +194,95 @@ def _parse_tenure_page(html: str) -> dict:
     }
 
 
+def _parse_managed_funds_tables(soup, manager_id: str) -> list:
+    """
+    解析经理详情页两张在管基金表格：
+    - 任职信息表: 基金代码/名称/类型/规模/任职时间/任职天数/任职回报
+    - 阶段业绩表: 近三月/近六月/近一年/近两年/今年来及各期同类排名
+    返回按基金代码合并后的列表，用于报告第四章4.2节横向业绩表。
+
+    字段名约定（供报告层读取）:
+      start_date, end_date, fund_scale, tenure_days, tenure_return,
+      perf_1y, rank_1y, perf_2y, rank_2y, perf_3m, perf_6m, perf_ytd
+    """
+    all_tables = soup.find_all('table')
+    funds_map = {}  # code -> dict
+
+    # ——— 按表头关键字定位表格（比按下标更健壮）———
+    tenure_table = None
+    perf_table = None
+    for tbl in all_tables:
+        # 取前两行的全部文本判断表格类型
+        header_cells = tbl.find_all(['th', 'td'], limit=20)
+        header_text = ''.join(c.get_text(strip=True) for c in header_cells)
+        if tenure_table is None and ('任职时间' in header_text or '任职天数' in header_text):
+            tenure_table = tbl
+        elif perf_table is None and ('近三月' in header_text or '近一年' in header_text or '近1年' in header_text):
+            perf_table = tbl
+        if tenure_table and perf_table:
+            break
+
+    # 降级兜底：按下标
+    if tenure_table is None and len(all_tables) > 1:
+        tenure_table = all_tables[1]
+    if perf_table is None and len(all_tables) > 2:
+        perf_table = all_tables[2]
+
+    # ——— 任职信息表 ———
+    if tenure_table:
+        for row in tenure_table.find_all('tr')[1:]:  # 跳过表头
+            cells = [td.get_text(strip=True) for td in row.find_all('td')]
+            if len(cells) < 8:
+                continue
+            code = cells[0].strip()
+            if not code or not re.match(r'^\d{6}$', code):
+                continue
+            tenure_str = cells[5]
+            # 解析 "2022-11-29 ~ 至今" 或 "2018-03-01 ~ 2021-06-01"
+            if '~' in tenure_str:
+                parts = [p.strip() for p in tenure_str.split('~', 1)]
+                start_date = parts[0]
+                end_date = parts[1]
+            else:
+                start_date = tenure_str.strip()
+                end_date = None
+            funds_map[code] = {
+                "fund_code": code,
+                "fund_name": cells[1],
+                "fund_type": cells[3],
+                "fund_scale": cells[4],    # 修正：原为 aum_yi
+                "start_date": start_date,  # 修正：原为 tenure_start
+                "end_date": end_date,      # 修正：原缺失
+                "tenure_period": tenure_str,
+                "tenure_days": cells[6],
+                "tenure_return": cells[7],
+            }
+
+    # ——— 阶段业绩及同类排名表 ———
+    # 列顺序：代码, 名称, 类型, 近三月, 同类排名, 近六月, 同类排名, 近一年, 同类排名, 近两年, 同类排名, 今年来, 同类排名
+    if perf_table:
+        for row in perf_table.find_all('tr')[1:]:
+            cells = [td.get_text(strip=True) for td in row.find_all('td')]
+            if len(cells) < 13:
+                continue
+            code = cells[0].strip()
+            if not code:
+                continue
+            perf = {
+                "perf_3m": cells[3],   "rank_3m": cells[4],
+                "perf_6m": cells[5],   "rank_6m": cells[6],
+                "perf_1y": cells[7],   "rank_1y": cells[8],
+                "perf_2y": cells[9],   "rank_2y": cells[10],
+                "perf_ytd": cells[11], "rank_ytd": cells[12],
+            }
+            if code in funds_map:
+                funds_map[code].update(perf)
+            else:
+                funds_map[code] = perf
+
+    return list(funds_map.values())
+
+
 def _parse_manager_detail(html: str, manager_id: str) -> dict:
     """
     解析经理详情页，提取：
@@ -198,6 +290,7 @@ def _parse_manager_detail(html: str, manager_id: str) -> dict:
     - 在管总规模（亿元）
     - 从业年限
     - 学历背景
+    - managed_funds_table: 每只在管基金的完整任职回报与同类排名（用于4.2节）
     """
     result = {"manager_id": manager_id}
     soup = BeautifulSoup(html, 'html.parser')
@@ -253,6 +346,9 @@ def _parse_manager_detail(html: str, manager_id: str) -> dict:
                             if m2:
                                 result['current_aum_yi'] = float(m2.group(1))
                                 break
+
+    # ——— 解析每只在管基金的完整业绩表格（4.2节核心数据）———
+    result['managed_funds_table'] = _parse_managed_funds_tables(soup, manager_id)
 
     return result
 
@@ -331,6 +427,15 @@ def fetch_manager_info(fund_code: str) -> dict:
         result["data_sources"].append("eastmoney_manager_detail")
 
     result["managers_detail"] = managers_detail
+
+    # ===== Step 2.5: 用 eastmoney 详情页的完整基金表替换 AKShare 残缺列表 =====
+    current_mid_for_table = result.get("manager_id")
+    if not current_mid_for_table and tenure_data.get("current_manager_id"):
+        current_mid_for_table = tenure_data["current_manager_id"]
+    if current_mid_for_table and current_mid_for_table in managers_detail:
+        full_table = managers_detail[current_mid_for_table].get("managed_funds_table", [])
+        if full_table:
+            result["managed_funds_list"] = full_table  # 覆盖 AKShare 的残缺列表
 
     # ===== Step 3: 当前经理详情 + 管理疲劳判断（智能合并）=====
     current_mid = result.get("manager_id")

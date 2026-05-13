@@ -33,7 +33,7 @@ def calculate_relative_metrics(fund_code: str, benchmark_code: str = "000300") -
     
     try:
         # 1. 获取基金日度净值
-        print(f"[INFO] 获取基金 {fund_code} 净值数据...")
+        print(f"[INFO] 获取基金 {fund_code} 净值数据...", file=sys.stderr)
         fund_nav_df = ak.fund_open_fund_info_em(symbol=fund_code, indicator="单位净值走势")
         
         if fund_nav_df.empty:
@@ -47,10 +47,10 @@ def calculate_relative_metrics(fund_code: str, benchmark_code: str = "000300") -
         # 计算日收益率
         fund_nav_df['return'] = fund_nav_df['nav'].pct_change()
         
-        print(f"[INFO] 基金数据: {len(fund_nav_df)} 条记录，{fund_nav_df['date'].min().date()} 至 {fund_nav_df['date'].max().date()}")
+        print(f"[INFO] 基金数据: {len(fund_nav_df)} 条记录，{fund_nav_df['date'].min().date()} 至 {fund_nav_df['date'].max().date()}", file=sys.stderr)
         
         # 2. 获取基准日度收盘价（沪深300）
-        print(f"[INFO] 获取基准 {benchmark_code} 数据...")
+        print(f"[INFO] 获取基准 {benchmark_code} 数据...", file=sys.stderr)
         try:
             # 尝试多个API，提高成功率
             benchmark_df = None
@@ -58,37 +58,42 @@ def calculate_relative_metrics(fund_code: str, benchmark_code: str = "000300") -
             # 方法1: index_zh_a_hist
             try:
                 benchmark_df = ak.index_zh_a_hist(symbol=benchmark_code, period="daily")
-                print(f"[INFO] 使用 index_zh_a_hist 获取基准数据")
+                print(f"[INFO] 使用 index_zh_a_hist 获取基准数据", file=sys.stderr)
             except Exception as e1:
-                print(f"[WARN] index_zh_a_hist 失败: {e1}")
+                print(f"[WARN] index_zh_a_hist 失败: {e1}", file=sys.stderr)
                 
                 # 方法2: stock_zh_index_hist_csindex (中证指数官网)
                 try:
                     benchmark_df = ak.stock_zh_index_hist_csindex(symbol=benchmark_code)
-                    print(f"[INFO] 使用 stock_zh_index_hist_csindex 获取基准数据")
+                    print(f"[INFO] 使用 stock_zh_index_hist_csindex 获取基准数据", file=sys.stderr)
                 except Exception as e2:
-                    print(f"[WARN] stock_zh_index_hist_csindex 失败: {e2}")
+                    print(f"[WARN] stock_zh_index_hist_csindex 失败: {e2}", file=sys.stderr)
                     
                     # 如果所有方法都失败，使用估算值
                     raise ValueError(f"所有基准数据API均失败: {e1}; {e2}")
             
             if benchmark_df is None or benchmark_df.empty:
                 raise ValueError("基准数据为空")
-            
-            # 重命名列（不同API列名可能不同）
-            if 'date' not in benchmark_df.columns:
-                # 尝试常见的日期列名
-                for col in ['日期', 'trade_date', 'datetime']:
-                    if col in benchmark_df.columns:
-                        benchmark_df = benchmark_df.rename(columns={col: 'date'})
-                        break
-            
-            if 'close' not in benchmark_df.columns:
-                # 尝试常见的收盘价列名
-                for col in ['收盘', 'price', 'close_price']:
-                    if col in benchmark_df.columns:
-                        benchmark_df = benchmark_df.rename(columns={col: 'price'})
-                        break
+
+            # 统一重命名日期列 → 'date'
+            date_col = next(
+                (c for c in ['日期', 'date', 'trade_date', 'datetime'] if c in benchmark_df.columns),
+                None
+            )
+            if date_col is None:
+                raise ValueError(f"找不到日期列，现有列: {list(benchmark_df.columns)}")
+            if date_col != 'date':
+                benchmark_df = benchmark_df.rename(columns={date_col: 'date'})
+
+            # 统一重命名收盘价列 → 'price'
+            price_col = next(
+                (c for c in ['收盘', 'close', 'price', 'close_price'] if c in benchmark_df.columns),
+                None
+            )
+            if price_col is None:
+                raise ValueError(f"找不到收盘价列，现有列: {list(benchmark_df.columns)}")
+            if price_col != 'price':
+                benchmark_df = benchmark_df.rename(columns={price_col: 'price'})
             
             benchmark_df['date'] = pd.to_datetime(benchmark_df['date'])
             benchmark_df = benchmark_df.sort_values('date').reset_index(drop=True)
@@ -96,10 +101,10 @@ def calculate_relative_metrics(fund_code: str, benchmark_code: str = "000300") -
             # 计算日收益率
             benchmark_df['return'] = benchmark_df['price'].pct_change()
             
-            print(f"[INFO] 基准数据: {len(benchmark_df)} 条记录")
+            print(f"[INFO] 基准数据: {len(benchmark_df)} 条记录", file=sys.stderr)
             
         except Exception as e:
-            print(f"[WARN] 获取基准数据失败: {e}，使用简化方法")
+            print(f"[WARN] 获取基准数据失败: {e}，使用简化方法", file=sys.stderr)
             # 如果无法获取基准数据，返回基于基金类型的估算值
             fund_type_estimate = {
                 "股票型": {"beta": 1.15, "alpha": 0.03, "ir": 0.6, "te": 0.18, "r2": 0.82},
@@ -133,7 +138,7 @@ def calculate_relative_metrics(fund_code: str, benchmark_code: str = "000300") -
         if len(merged_df) < 60:
             raise ValueError(f"有效数据点不足: {len(merged_df)} < 60")
         
-        print(f"[INFO] 对齐后数据: {len(merged_df)} 条记录")
+        print(f"[INFO] 对齐后数据: {len(merged_df)} 条记录", file=sys.stderr)
         
         # 4. 计算Beta和Alpha（线性回归）
         fund_returns = merged_df['return_fund'].values
@@ -177,15 +182,15 @@ def calculate_relative_metrics(fund_code: str, benchmark_code: str = "000300") -
             "data_sources": ["akshare_fund_nav", "akshare_benchmark"]
         })
         
-        print(f"[INFO] 计算完成:")
-        print(f"  Beta: {result['beta']}")
-        print(f"  Alpha (年化): {result['alpha_annualized']:.2%}")
-        print(f"  信息比率: {result['information_ratio']:.4f}")
-        print(f"  跟踪误差 (年化): {result['tracking_error_annualized']:.2%}")
-        print(f"  R²: {result['r_squared']:.4f}")
+        print(f"[INFO] 计算完成:", file=sys.stderr)
+        print(f"  Beta: {result['beta']}", file=sys.stderr)
+        print(f"  Alpha (年化): {result['alpha_annualized']:.2%}", file=sys.stderr)
+        print(f"  信息比率: {result['information_ratio']:.4f}", file=sys.stderr)
+        print(f"  跟踪误差 (年化): {result['tracking_error_annualized']:.2%}", file=sys.stderr)
+        print(f"  R²: {result['r_squared']:.4f}", file=sys.stderr)
         
     except Exception as e:
-        print(f"[ERROR] 计算失败: {str(e)}")
+        print(f"[ERROR] 计算失败: {str(e)}", file=sys.stderr)
         result["error"] = str(e)
         result["note"] = "计算失败，请检查网络连接和数据可用性"
     

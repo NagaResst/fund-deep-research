@@ -182,7 +182,7 @@ def fetch_complete_fund_info(fund_code: str) -> dict:
             
             result["data_sources"].append("akshare_overview")
     except Exception as e:
-        print(f"[WARN] fund_overview_em failed: {e}")
+        print(f"[WARN] fund_overview_em failed: {e}", file=sys.stderr)
     
     # 2. 获取申购状态和购买起点
     try:
@@ -206,7 +206,7 @@ def fetch_complete_fund_info(fund_code: str) -> dict:
             
             result["data_sources"].append("akshare_purchase")
     except Exception as e:
-        print(f"[WARN] fund_purchase_em failed: {e}")
+        print(f"[WARN] fund_purchase_em failed: {e}", file=sys.stderr)
     
     # 3. 获取阶段收益率（从移动端API）
     try:
@@ -252,7 +252,7 @@ def fetch_complete_fund_info(fund_code: str) -> dict:
         if items:
             result['data_sources'].append('eastmoney_mobile_api_performance')
     except Exception as e:
-        print(f"[WARN] performance API failed: {e}")
+        print(f"[WARN] performance API failed: {e}", file=sys.stderr)
     
     # 4. 获取最新净值（从净值历史API）
     try:
@@ -263,7 +263,7 @@ def fetch_complete_fund_info(fund_code: str) -> dict:
             result["current_nav_date"] = str(latest_nav.get('净值日期', ''))
             result["data_sources"].append("akshare_nav")
     except Exception as e:
-        print(f"[WARN] nav history failed: {e}")
+        print(f"[WARN] nav history failed: {e}", file=sys.stderr)
     
     return result
 

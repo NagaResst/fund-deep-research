@@ -284,31 +284,30 @@ python skills/fund-deep-research/scripts/check_data_integrity.py <基金代码>
 
 **必须进行以下搜索**：
 
-#### A. 净值拐点识别（第三章发展历史骨架生成·必须最先完成）
+#### A. 净值拐点识别（第三章发展历史骨架生成·Step 1 已完成）
 
-> **本节是第三章"基金发展历史"的数据基础**，必须在所有深度搜索前完成。
+> `calc_inflection_points.py` 已在 Step 1 并行执行完毕，结果已保存到 `/tmp/fund_research_{code}/raw/inflection_points.json`，**无需重跑脚本**。
 
-使用 `/tmp/fund_research_{code}/raw/nav_daily.json`，运行以下脚本，结果保存到 `/tmp/fund_research_{code}/raw/inflection_points.json`：
-
-```bash
-python skills/fund-deep-research/scripts/calc_inflection_points.py <基金代码>
+直接执行：
+```
+read_file /tmp/fund_research_{code}/raw/inflection_points.json
 ```
 
-1. **拐点定义**：从局部极大值到极小值（或反向）净值变动幅度 ≥ 5%，即为一个拐点。
-2. **识别算法**：滚动 20 日高低点 → 过滤交替极值 → 按幅度排序保留前 30
-3. **输出格式**（每个拐点）：
+确认文件加载后，后续所有深度搜索（B/C/D/E/F）通过 `read_file` 读取该文件获取数据，不依赖记忆。字段说明：
+
+1. **拐点定义**：从局部极大値到极小値（或反向）净值变动幅度 ≥ 5%，即为一个拐点。
+2. **识别算法**：滚动 20 日高低点 → 过滤交替极値 → 按幅度排序保留前 30
+3. **每个拐点格式**：
    ```
    拐点 N：起始日期 → 结束日期，起始净值 → 结束净值，变动幅度 ±X.X%
    ```
-4. **阶段划分**：将成立至今的净值历史划分为若干"发展阶段"（通常 3-6 个阶段），每阶段包含若干拐点。
-
-> ✅ 脚本运行完毕后**无需在对话中输出拐点列表**，后续所有深度搜索（B/C/D/E/F）通过 `read_file` 读取 `/tmp/fund_research_{code}/raw/inflection_points.json` 获取数据，不依赖记忆。
+4. **阶段划分**：将成立至今的净值历史划分为若干“发展阶段”（通常 3-6 个阶段），每阶段包含若干拐点。
 
 #### B. 全量季度数据与年度收益（直接使用 Step 1 已有输出）
 
 > `ak_quarterly_calc.py` 和 `calc_annual_returns.py` 已在 Step 1 运行完毕，**无需重跑**。
 > 
-> - 通过 `read_file` 读取 `/tmp/fund_research_{code}/raw/quarterly.json` 作为逐季复盘骨架（含每季末净值、前十大重仓股及占比）
+> - 通过 `read_file` 读取 `/tmp/fund_research_{code}/raw/quarterly.json` 作为逆季复盘骨架（含每季末净值和季度收益率；**注意**：该文件不含持仓数据，逐季持仓对毕请读取 `holdings.json` 中的 `holdings_by_period`）
 > - 通过 `read_file` 读取 `/tmp/fund_research_{code}/raw/annual_returns.json` 获取完整年度收益数据（2017-2025）
 
 #### C. 相对基准指标计算（第七章风险指标增强·Step 1已完成）
@@ -394,11 +393,12 @@ python skills/fund-deep-research/scripts/calc_inflection_points.py <基金代码
 
 > **与 Step 5C 的关系**：Step 5C 以「季度」为颗粒度逐季复盘；本节以「净值波段」为颗粒度，将跨越多季度的完整行情段作为分析单元，两者互补。Step 5C 的输出可直接作为本节的持仓素材。
 
-使用 Step 5A 识别的拐点列表（`analysis/inflection_points.json`）作为分析骨架，以**波段**（相邻拐点之间的区间）为颗粒度，将季度持仓数据嵌入其中：
+使用 Step 5A 识别的拐点列表（`raw/inflection_points.json`）作为分析骨架，以**波段**（相邻拐点之间的区间）为颗粒度，将季度持仓数据嵌入其中：
 
 1. **逐段搜索官方通告原文**：
    - 关键词：`"{基金名称} {年份}年第X季度报告 投资策略和运作分析"`
    - **目标**：提取经理在该波段对应季报中的原始文字表述
+   - **⚠️ 写入格式要求**：每条季报摘录单独标注 `[QUARTERLY_QUOTE][基金代码][YYYYQX]`，方便第四章4.4节直接检索引用
 2. **对比持仓动作**：
    - 结合 Step 5C 的季度持仓数据，验证经理是否按说的做了
    - **识别风险**：经理说"防守"但持仓更集中 → 标注"言行不一"
@@ -409,6 +409,9 @@ python skills/fund-deep-research/scripts/calc_inflection_points.py <基金代码
    · 👤 经理操作：季报原文"……" + 持仓变化（新进/退出/加减仓）
    · 📊 归因评价：Beta贡献X% / Alpha贡献Y% / 言行一致性✅⚠️❌ / 点评
    ```
+4. **第四章素材归纳**（写入 `search_log.md` `[Step5-H-Summary]` 段）：
+   - 所有季报引用中，选出最能体现"言行一致"和"言行偏差"的各1-2条，注明用于4.4节
+   - 总结仓位管理风格：从各季度股票仓位数据推断"全程高仓位 / 主动择时 / 防御型"，注明用于4.3节
 
 #### I. 历任经理深度追踪与风格演变审计
 
@@ -479,7 +482,13 @@ python skills/fund-deep-research/scripts/calc_inflection_points.py <基金代码
 |---------|------|----------------------------------------|
 | 1 | **第一章** 基金基本信息 | `raw/fund_enhanced.json` (含风险等级、赎回费规则) · `raw/manager_info.json` (含在管基金统计) |
 | 2 | **第三章** 基金发展历史 | `raw/inflection_points.json` · `search_log.md`（grep `[Step5-C]` `[Step5-G]` 段） |
-| 3 | **第四章** 基金经理深度分析 | `raw/manager_info.json` (含AKShare获取的在管数据) · `search_log.md`（grep `[Step5-H]` 段） |
+| 3 | **第四章** 基金经理深度分析 | `raw/manager_info.json` (含AKShare获取的在管数据) · `search_log.md`（grep `[Step5-H]` `[Step5-I]` 段） |
+
+> **第四章强制写作要求**（未满足则章节不合格）：
+> 1. **4.2 节**：必须逐行列出经理名下**所有**在管基金（来自 `manager_info.json`），包含代码、任期、总回报、同类排名
+> 2. **4.4 节**：必须引用**至少2个季度的季报原始文字**（来自 `search_log.md` 中 `[Step5-H]` 段），每条对照实际持仓，给出 ✅⚠️❌ 判断
+> 3. **4.3 节**：必须明确写出仓位管理风格（如"全程高仓位约90%+"或"主动择时"），并说明对回撤的影响
+> 4. **4.6 节**：必须输出4维能力画像：最强能力、明显短板、适合配置的市场环境、应规避的市场环境
 | 4 | **第五章** 基金公司合规评估 | `raw/institutional_risk.json` · `raw/blacklist.json` · `search_log.md`（grep `[Step5-I]` 段） |
 | 5 | **第六章** 持仓分析 | `raw/holdings.json` |
 | 6 | **第七章** 风险指标 | `raw/risk_metrics.json` · `raw/relative_metrics.json` (新增: Beta/Alpha等) |
@@ -487,6 +496,30 @@ python skills/fund-deep-research/scripts/calc_inflection_points.py <基金代码
 | 8 | **第九章** 历史业绩分析 | `raw/quarterly.json` · `raw/annual_returns.json` · `search_log.md`（grep `[Step5-D]` `[Step5-F]` 段） |
 | 9 | **第十章** 后续跟踪计划 | 已写入的报告文件 |
 | **10** | **第二章** 综合评价与配置建议 | 已写入的报告文件 · `reference/scoring-matrix.md` |
+
+> **各章强制写作规则（未满足则章节不合格）：**
+>
+> **第五章（5.3 一票否决项）**：
+> - 若所有否决项全部通过（✅），**不得输出表格**，改用一行引用块：`> 合规检查通过，无一票否决项触发。`
+> - 只有存在 ❌ 项时才展示完整否决项表格
+>
+> **第六章（6.3 持仓演变）**：
+> - **覆盖范围：`holdings.json` 中 `holdings_by_period` 的所有季度，从成立首季到最新季报，逐季全部列出，不得截断为"近六期"**
+> - 禁止列出当期重仓股名称，仅记录调整本身（新进↑ / 退出↓ / 加仓⬆ / 减仓⬇）
+> - 必须新增「行业调整（产业链位置移动）」列，描述行业层面仓位净移动（如"上游锂资源 +Xpp；中游制造 -Xpp"）
+> - 必须新增「前十集中度」列和「当季净值涨跌」列
+> - 「关键调仓解读」须列出所有重大转型节点（不少于3条），每条说明判断逻辑+事后净值验证
+>
+> **第七章（7.1 绝对风险指标）**：
+> - 全期指标与近期夏普指标**必须分两个子表**，不得混排
+>
+> **第九章（9.2 季度收益）**：
+> - 必须包含**沪深300同期季度收益对比行**（斜体）和**超额行**（加粗），每年3行成组
+> - 正超额季度标注 ✅，负超额季度标注 ⚠️
+>
+> **第十章（10.1 跟踪指标）**：
+> - 「当前值」列**必须为量化数字或具体日期格式**（如"X.X万元/吨（YYYY-MM-DD）"）
+> - 禁止填写"底部修复中"、"N/A"、"待确认"等文字描述；若数据暂缺，填写最近可得值并注明日期
 
 > 💡 **`search_log.md` 读取优化**：该文件可能很大，不要全量 read_file。  
 > 使用 `grep_search` 定位目标段落标题（如 `## [Step5-F]`），再用 `read_file` 精确读取对应行范围。
@@ -533,3 +566,91 @@ python skills/fund-deep-research/scripts/calc_inflection_points.py <基金代码
 > **[reference/web-platform-json-conversion.md](reference/web-platform-json-conversion.md)**
 
 完成报告后如需转换为 Web 平台 JSON，按该文档操作，完成后运行 `cd web-platform && npm run build`。
+
+---
+
+### 🤖 自动化流水线（报告生成后）
+
+报告写完后，使用以下两步脚本将缓存数据和报告内容自动同步到 Web 平台 JSON，无需手动复制字段。
+
+**字段分类原则**：
+- **A 类（确定性字段）**：来自 AKShare 缓存，由脚本直接提取，无歧义
+- **B 类（叙述性字段）**：来自研究报告正文，需由 AI 解析后填入
+
+#### Step A：从缓存写入 A 类字段
+
+```bash
+python3 skills/fund-deep-research/scripts/build_json_from_cache.py <基金代码>
+```
+
+自动提取并写入以下字段（不覆盖 B 类字段）：
+
+| 缓存文件 | → JSON 字段 |
+|---|---|
+| `fund_enhanced.json` | `basic.*` / `fees.*` / `scale.nav` |
+| `nav_daily.json` | `navHistory[]` |
+| `holdings.json` | `holdings.top10[]` / `holdings.sectors[]` / `holdings.date` |
+| `annual_returns.json` | `performance.annual[]` |
+| `quarterly.json` | `performance.quarterly[]` |
+| `risk_metrics.json` | `risk.volatility` / `sharpe` / `calmar` / `maxDrawdown` |
+| `relative_metrics.json` | `risk.relativeMetrics.*`（beta/alpha/IR/跟踪误差） |
+| `inflection_points.json` | `stageAnalysis.inflectionPoints[]` |
+| `manager_info.json` | `managers.current.managerId/name/experience/fundCount/totalScale` |
+
+脚本运行后会打印 B 类字段的填写状态（✅ 已有 / ❌ 缺失），方便定向补充。
+
+#### Step B：从报告提取 B 类字段（AI 解析）
+
+1. 打开报告 MD 文件
+2. 参照 **[reference/report_to_json_spec.md](reference/report_to_json_spec.md)** 中的 Prompt 模板，将规范 + 报告内容一起发给 AI
+3. AI 输出一个仅包含 B 类字段的 JSON，保存到 `/tmp/fund_research_{code}/b_fields.json`
+4. 运行合并脚本：
+
+```bash
+# 仅填充缺失字段（默认）
+python3 skills/fund-deep-research/scripts/merge_b_fields.py <基金代码> /tmp/fund_research_<代码>/b_fields.json
+
+# 强制更新已有字段
+python3 skills/fund-deep-research/scripts/merge_b_fields.py <基金代码> /tmp/fund_research_<代码>/b_fields.json --overwrite
+```
+
+B 类字段对应报告章节：
+
+| 报告章节 | → JSON 字段 |
+|---|---|
+| 第二章 2.1 综合评级 | `scoring.total/grade/recommendation/rating/logic` |
+| 第二章 2.2 风险信号 | `scoring.risks[]` |
+| 第二章 2.3 操作建议 | `scoring.termAdvice[]` |
+| 第三章 3.1 阶段总览 | `stageAnalysis.stages[].description/env/managerAction` |
+| 第四章 4.3 投资理念 | `managers.current.philosophy[]` |
+| 第四章 4.4 言行审计 | `managers.current.consistencyAudit[]` |
+| 第四章 4.6 能力画像 | `managers.current.abilityProfile{}` |
+| 第五章 排除法检查 | `exclusionCheck.items[]` |
+| 第六章 持仓主题 | `holdings.themeGroups[]` / `evolutionHighlights[]` |
+| 第八章 政策匹配 | `policy.tags` / `policyBreakdown[]` / `scenarios[]` |
+| 第九章 9.3 里程碑 | `performance.milestones[]` |
+| 第十章 跟踪计划 | `tracking.weekly[]` / `quarterly[]` / `alerts[]` |
+
+#### 完整流水线命令序列
+
+```bash
+CODE=003984
+
+# Step 1：数据采集（已有）
+python3 skills/fund-deep-research/scripts/parallel_data_collection_v2.py ${CODE}
+
+# Step 2：生成研究报告（AI 写作，参照 SKILL.md Step 6）
+
+# Step 3：A 类字段自动写入
+python3 skills/fund-deep-research/scripts/build_json_from_cache.py ${CODE}
+
+# Step 4：AI 解析报告 → 保存 B 类字段 JSON
+# 参照 reference/report_to_json_spec.md 的 Prompt 模板
+# 将输出保存到 /tmp/fund_research_${CODE}/b_fields.json
+
+# Step 5：B 类字段合并
+python3 skills/fund-deep-research/scripts/merge_b_fields.py ${CODE} /tmp/fund_research_${CODE}/b_fields.json
+
+# Step 6：重新构建 Web 平台
+cd web-platform && npm run build
+```

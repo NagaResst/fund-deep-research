@@ -72,7 +72,8 @@ def main():
     if not rm:
         issues.append("❌ risk_metrics.json 缺失")
     else:
-        for field in ["return_1y", "sharpe_ratio", "max_drawdown"]:
+        # calc_risk_metrics.py 实际输出 annual_return，不含 return_1y（后者在 fund_enhanced.json）
+        for field in ["annual_return", "sharpe_ratio", "max_drawdown"]:
             val = rm.get(field)
             if val is None or val in ["N/A", ""]:
                 issues.append(f"⚠️  risk_metrics.{field} = N/A")
@@ -81,7 +82,9 @@ def main():
     if not na:
         issues.append("❌ nav_daily.json 缺失")
     else:
-        latest_date = na[0].get("date") if na else None
+        # nav_daily.json 是 dict，净值列表在 nav_data 字段，按升序排列，最后一条最新
+        nav_list = na.get("nav_data", []) if isinstance(na, dict) else na
+        latest_date = nav_list[-1].get("date") if nav_list else None
         if latest_date:
             latest = datetime.strptime(latest_date, "%Y-%m-%d").date()
             days_lag = (today - latest).days
@@ -90,7 +93,7 @@ def main():
                     f"⚠️  nav_daily 最新日期 {latest_date}，已落后 {days_lag} 天（>T-1），需重拉"
                 )
             else:
-                print(f"✅ nav_daily 时效正常：{latest_date}（T-{days_lag}），共 {len(na)} 条")
+                print(f"✅ nav_daily 时效正常：{latest_date}（T-{days_lag}），共 {len(nav_list)} 条")
 
     # ── D. 持仓时效（最近季报，>4 个月告警）──────────────────────────
     if not ho:
@@ -133,7 +136,7 @@ def main():
         elif has_stale_nav:
             print("NEXT_ACTION: REFRESH_NAV")
             print("→ 重拉 nav_daily.json：")
-            print(f"  python3 skills/fund-deep-research/scripts/fetch_nav_daily.py {code} --output /tmp/fund_research_{code}/raw/nav_daily.json")
+            print(f"  python3 skills/fund-deep-research/scripts/ak_nav_history.py {code}")
         elif has_stale_ho:
             print("NEXT_ACTION: REFRESH_HOLDINGS")
             print("→ 重跑 parallel_data_collection.py 更新持仓季报数据")

@@ -21,10 +21,13 @@ def main():
     # 获取净值历史
     nav_df = fetcher._fetch_nav_history()
     
+    # 格式化日期为 YYYY-MM-DD 字符串（去掉 pandas Timestamp 的时间戳部分）
+    nav_df['date'] = nav_df['date'].dt.strftime('%Y-%m-%d')
+
     result = {
         "fund_code": fund_code,
         "nav_count": len(nav_df),
-        "date_range": f"{nav_df['date'].iloc[0].strftime('%Y-%m-%d')} to {nav_df['date'].iloc[-1].strftime('%Y-%m-%d')}" if not nav_df.empty else "",
+        "date_range": f"{nav_df['date'].iloc[0]} to {nav_df['date'].iloc[-1]}" if not nav_df.empty else "",
         "latest_nav": float(nav_df.iloc[-1]['nav']) if not nav_df.empty else None,
         "data_source": "akshare",
         "nav_data": nav_df.to_dict('records') if not nav_df.empty else []

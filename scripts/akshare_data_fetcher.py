@@ -5,6 +5,7 @@ AKShare 基金数据获取核心模块
 封装所有 AKShare API 调用，提供统一的数据获取接口
 """
 
+import sys
 import akshare as ak
 import pandas as pd
 from datetime import datetime
@@ -52,7 +53,7 @@ class AKShareFundFetcher:
             return result
             
         except Exception as e:
-            print(f"[WARN] _fetch_basic_info failed: {e}")
+            print(f"[WARN] _fetch_basic_info failed: {e}", file=sys.stderr)
             return {
                 "full_name": "N/A",
                 "fund_type": "N/A",
@@ -114,7 +115,7 @@ class AKShareFundFetcher:
             return result
             
         except Exception as e:
-            print(f"[WARN] _fetch_performance failed: {e}")
+            print(f"[WARN] _fetch_performance failed: {e}", file=sys.stderr)
             return {}
     
     def _fetch_nav_history(self) -> pd.DataFrame:
@@ -144,7 +145,7 @@ class AKShareFundFetcher:
             return nav_df
             
         except Exception as e:
-            print(f"[WARN] _fetch_nav_history failed: {e}")
+            print(f"[WARN] _fetch_nav_history failed: {e}", file=sys.stderr)
             return pd.DataFrame(columns=['date', 'nav'])
     
     def _fetch_holdings(self, year: str = "2024") -> pd.DataFrame:
@@ -165,7 +166,7 @@ class AKShareFundFetcher:
             return holdings_df
             
         except Exception as e:
-            print(f"[WARN] _fetch_holdings failed: {e}")
+            print(f"[WARN] _fetch_holdings failed: {e}", file=sys.stderr)
             return pd.DataFrame()
     
     def _fetch_manager_info(self) -> dict:
@@ -189,7 +190,7 @@ class AKShareFundFetcher:
             }
             
         except Exception as e:
-            print(f"[WARN] _fetch_manager_info failed: {e}")
+            print(f"[WARN] _fetch_manager_info failed: {e}", file=sys.stderr)
             return {}
 
 
