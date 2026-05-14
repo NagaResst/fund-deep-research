@@ -11,6 +11,9 @@
 2. 要求 AI 输出一个 **JSON 文档**（仅包含 B 类字段，不含 A 类字段）
 3. 使用 `merge_b_fields.py` 脚本将输出合并到现有 JSON（不会覆盖已有 B 类字段，除非 `--overwrite` 标志）
 
+> 当前 Web 端的 **canonical schema** 以 `web-platform/public/data/003984.json` 为准。
+> 若本规范中的章节示例与历史旧 JSON / 旧提示词冲突，**一律以当前前端实际消费结构为准**。
+
 ---
 
 ## Prompt 模板
@@ -20,11 +23,16 @@
 严格按照字段规范，提取所有 B 类字段，输出一个 JSON 对象。
 
 规则：
-1. 严格按照下面的 JSON Schema 输出，不要添加额外字段
+1. 严格按照下面的 JSON Schema 输出，不要添加额外字段，也不要沿用旧字段名
 2. 只输出能从报告中找到依据的内容，找不到则用 null
 3. 文字内容保持简洁，最多2-3句话
 4. 不要输出报告原文大段摘抄，要提炼关键信息
 5. 最终只输出一个 JSON 代码块，不要有任何前缀说明
+6. 输出必须与当前 Web 前端消费结构兼容，例如：
+  - `tracking.alerts[]` 使用 `icon/text/level`
+  - `exclusionCheck` 是数组，不是 `{overallPass, items}` 对象
+  - `scoring.risks[]` 使用 `type/note/level`
+  - `scoring.termAdvice[]` 使用 `term/icon/level/advice`
 
 字段规范见下方各章节说明。
 报告内容：
@@ -40,38 +48,67 @@
 ```json
 {
   "scoring": {
-    "total": 72,                    // 数字，综合评分（满分100）
-    "grade": "B+",                  // 字符串，综合等级（S/A/B+/B/C）
-    "recommendation": "谨慎关注",   // 字符串，一句话投资建议
-    "rating": "★★★☆☆",             // 字符串，五星制显示
-    "logic": "...",                 // 字符串，核心投资逻辑（1-2句）
+    "total": 77,
+    "grade": "良好",
+    "recommendation": "观望（谨慎建仓)",
+    "recommendationType": "cautious",   // "cautious" | "buy" | "sell" | "strong_buy"
+    "rating": "★★★",
+    "logic": "...",
+
+    "dimensions": [
+      {
+        "name": "超额收益能力",
+        "score": 24,
+        "maxScore": 30,
+        "pros": ["..."],
+        "cons": ["..."]
+      }
+    ],
 
     "risks": [
       {
-        "level": "高",              // "高" | "中" | "低"
-        "label": "回撤风险",        // 简短标签
-        "text": "..."               // 1-2句风险说明
+        "type": "极端回撤风险",
+        "level": "high",             // "high" | "medium" | "low"
+        "note": "..."
       }
     ],
+
+    "policyItems": [
+      {
+        "name": "十五五能源规划",
+        "date": "2025-03",
+        "content": "...",
+        "impact": "strong_pos",      // "strong_pos" | "pos" | "neutral" | "light_neg" | "neg"
+        "impactLabel": "🟢 强利好"
+      }
+    ],
+
+    "marketStatus": [
+      {
+        "dim": "净值位置",
+        "status": "81.3% 历史分位",
+        "statusType": "warning",     // "positive" | "warning" | "neutral" | "cautious"
+        "detail": "..."
+      }
+    ],
+
+    "allocationSuggestions": [
+      {
+        "scenario": "新入场投资者",
+        "action": "暂不建仓",
+        "note": "..."
+      }
+    ],
+
+    "suitableFor": ["..."],
+    "notSuitableFor": ["..."],
 
     "termAdvice": [
       {
         "term": "短期（1-3月）",
-        "rating": "观望",           // "买入" | "加仓" | "持有" | "观望" | "减仓" | "卖出"
-        "logic": "...",
-        "suggestion": "..."
-      },
-      {
-        "term": "中期（3-12月）",
-        "rating": "...",
-        "logic": "...",
-        "suggestion": "..."
-      },
-      {
-        "term": "长期（1年以上）",
-        "rating": "...",
-        "logic": "...",
-        "suggestion": "..."
+        "icon": "⚠️",
+        "level": "cautious",        // "positive" | "neutral" | "cautious"
+        "advice": "..."
       }
     ]
   }
@@ -79,9 +116,13 @@
 ```
 
 **提取来源**：
-- `total` / `grade` → 第2.1节「综合评级」评分表格
-- `risks[]` → 第2.2节「风险信号」汇总表，每行一个对象
-- `termAdvice[]` → 第2.3节「短中长期操作建议」表格，每行一个对象
+- `total` / `grade` / `recommendation` / `logic` / `dimensions[]` → 第2章主结论与评分表
+- `risks[]` → 第2章「风险信号」
+- `policyItems[]` → 第2章政策红利表格
+- `marketStatus[]` → 第2章市场状态表格
+- `allocationSuggestions[]` / `suitableFor[]` / `notSuitableFor[]` → 第2章配置建议与适用场景
+- `termAdvice[]` → 第2章短中长期建议
+- 不要输出旧结构 `label/text`、`rating/logic/suggestion`
 
 ---
 
@@ -124,8 +165,16 @@
       "manageYears": 9.8,            // 管理年数（数字，保留1位小数）
       "tenureReturn": 229.04,        // 任期内回报率（百分比数字，如229.04）
       "peerAvgReturn": 45.0,         // 同类平均回报率
-      "rankInPeer": "前20%",         // 同类排名描述
-      "historicalFunds": ["基金A", "基金B"],  // 历史管理过的基金列表
+      "rankInPeer": "前20%",         // 排名描述或名次文本
+      "rankTotal": 1087,
+      "historicalFunds": [
+        {
+          "name": "基金A",
+          "type": "股票型",
+          "tenure": "2019-01 ~ 2022-12",
+          "return": 35.6
+        }
+      ],
 
       "philosophy": [
         { "label": "核心投资理念", "text": "..." },
@@ -161,7 +210,7 @@
 
 **提取来源**：
 - `title/style/manageDate/manageYears/tenureReturn/peerAvgReturn/rankInPeer` → 第4.1节表格
-- `historicalFunds` → 第4.2节历史基金列表
+- `historicalFunds[]` → 第4.2节历史基金列表；若报告无收益率，不要硬填空对象
 - `philosophy` → 第4.3节投资理念与风格
 - `consistencyAudit` → 第4.4节言行一致性审计
 - `abilityProfile` → 第4.6节综合能力画像
@@ -186,23 +235,29 @@
       {
         "name": "储能与电池",
         "color": "#3b82f6",
-        "stocks": ["宁德时代", "亿纬锂能"]
+        "ratio": 32.5,
+        "stocks": "宁德时代 / 亿纬锂能",
+        "note": "..."
       }
     ],
 
     "evolutionHighlights": [
       {
         "quarter": "2025Q4",
-        "action": "减持光伏，加仓储能",
-        "implication": "..."
+        "type": "positive",         // "positive" | "warning" | "neutral"
+        "change": "减持光伏，加仓储能",
+        "return": "+12.4%",
+        "theme": "聚焦储能链",
+        "insight": "..."
       }
     ],
 
     "policyLinks": [
       {
-        "policy": "新型储能规划",
-        "impact": "直接利好",
-        "stocks": ["宁德时代"]
+        "sector": "储能",
+        "color": "#58a6ff",
+        "stocks": "宁德时代 / 亿纬锂能",
+        "policyNote": "..."
       }
     ]
   }
@@ -214,6 +269,7 @@
 - `themeGroups` → 第6.2节持仓主题分析
 - `evolutionHighlights` → 第6.3节持仓演变
 - `policyLinks` → 第六章政策关联分析
+- 不要输出旧结构 `action/implication` 或 `policy/impact`
 
 ---
 
@@ -248,40 +304,82 @@
 ```json
 {
   "policy": {
-    "tags": ["十五五规划", "新型储能", "新能源汽车"],
+    "tags": [
+      {
+        "label": "十五五规划",
+        "strength": "high",        // "high" | "medium" | "low"
+        "color": "#F54E48"
+      }
+    ],
 
-    "adaptability": {
-      "overallRating": "高度契合",
-      "score": 85,
-      "rationale": "..."
-    },
+    "industryOverview": [
+      {
+        "point": "新能源汽车渗透率",
+        "detail": "..."
+      }
+    ],
 
-    "fifteenFive": {
-      "coverage": "重点受益",
-      "details": "..."
-    },
+    "cyclePeriod": "政策红利期",
+    "cycleReason": "...",
+
+    "fifteenFive": [
+      {
+        "direction": "关键矿产安全保障",
+        "color": "#F54E48",
+        "description": "...",
+        "holdings": "盐湖股份 / 赣锋锂业"
+      }
+    ],
+
+    "longTermRisks": [
+      {
+        "risk": "碳酸锂产能过剩再现",
+        "level": "medium",
+        "signal": "..."
+      }
+    ],
+
+    "adaptability": [
+      {
+        "env": "🐂 新能源顺风期",
+        "perf": "...",
+        "color": "#F54E48"
+      }
+    ],
 
     "scenarios": [
       {
-        "name": "政策超预期落地",
-        "probability": "中",          // "高" | "中" | "低"
-        "impact": "正面",             // "正面" | "负面" | "中性"
-        "description": "..."
+        "type": "基准",               // "乐观" | "基准" | "悲观"
+        "probability": 55,
+        "color": "#58a6ff",
+        "returnLow": 20,
+        "returnHigh": 30,
+        "trigger": "..."
       }
     ],
 
     "policyBreakdown": [
       {
-        "policyName": "新型储能行动方案",
-        "relevance": "直接受益",
-        "details": "..."
+        "sector": "储能",
+        "icon": "⚡",
+        "color": "#58a6ff",
+        "logic": "...",
+        "stocks": ["宁德时代"]
       }
-    ]
+    ],
+
+    "note": "..."
   }
 }
 ```
 
 **提取来源**：第八章各节
+
+**注意**：
+- `tags` 必须输出对象数组，不是字符串数组
+- `fifteenFive` / `adaptability` 必须输出数组，不是单对象
+- `scenarios` 必须包含概率和收益区间，不能再使用旧字段 `name/impact/description`
+- `policyBreakdown` 必须可直接支撑前端卡片展示
 
 ---
 
@@ -291,37 +389,18 @@
 {
   "tracking": {
     "weekly": [
-      {
-        "dimension": "净值跟踪",
-        "indicator": "日涨跌幅",
-        "target": "与中证新能源走势对比",
-        "action": "偏离>3%即关注"
-      }
+      "净值方向验证：每日净值涨跌是否与锂电/锂矿/新能源板块行情一致"
     ],
 
     "quarterly": [
-      {
-        "dimension": "持仓验证",
-        "checkItem": "季报持仓是否符合策略承诺",
-        "warningLine": "前10与声称方向不符",
-        "exitLine": "连续2季偏离"
-      }
+      "持仓变化：新季报前十持仓是否维持主线，锂矿资源占比是否稳定"
     ],
 
     "alerts": [
       {
-        "level": "一票否决",          // "一票否决" | "减仓" | "关注"
-        "signal": "基金经理离职",
-        "action": "立即评估换仓"
-      }
-    ],
-
-    "positions": [
-      {
-        "triggerNav": 2.8,
-        "action": "加仓",
-        "ratio": "10%",
-        "condition": "行业景气度向好"
+        "level": "critical",        // "critical" | "warning"
+        "icon": "🚨",
+        "text": "基金经理更换：需重新完整评估接任者"
       }
     ]
   }
@@ -332,7 +411,11 @@
 - `weekly` → 第10.1节日常跟踪要点
 - `quarterly` → 第10.2节季度复盘
 - `alerts` → 第10.3节预警信号
-- `positions` → 第10.4节持仓回顾节点
+
+**注意**：
+- `weekly` / `quarterly` 当前前端消费的是 **字符串数组**，不是对象数组
+- `alerts` 必须使用 `icon/text/level`，不要再输出 `signal/action`
+- 第10.4节「持仓回顾节点」当前不属于 `tracking` canonical schema，如需落库请单独扩展前端后再定义
 
 ---
 
@@ -340,20 +423,19 @@
 
 ```json
 {
-  "exclusionCheck": {
-    "overallPass": true,
-    "items": [
-      {
-        "item": "基金规模",
-        "result": "pass",           // "pass" | "warn" | "fail"
-        "detail": "规模12亿，适中"
-      }
-    ]
-  }
+  "exclusionCheck": [
+    {
+      "item": "基金规模是否过小（<2亿元）",
+      "pass": true,
+      "note": "规模31.51亿元，规模适中，无清盘风险"
+    }
+  ]
 }
 ```
 
 **提取来源**：第五章排除法检查表格，每行一个对象
+
+**注意**：不要输出旧结构 `overallPass/items/result/detail`，前端当前消费的是对象数组 `[{item, pass, note}]`
 
 ---
 

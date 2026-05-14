@@ -35,6 +35,61 @@ FATIGUE_FUND_COUNT = 10   # 在管基金数超过此值视为管理疲劳
 FATIGUE_AUM_YI = 500      # 在管规模超过此值（亿元）视为管理疲劳
 
 
+def _normalize_name_list(value) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+
+    text = str(value).strip()
+    if not text:
+        return []
+    parts = re.split(r'[\/、,，;；]+', text)
+    return [part.strip() for part in parts if part.strip()]
+
+
+def _normalize_id_list(value) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    text = str(value).strip()
+    return [text] if text else []
+
+
+def _build_identity_audit(akshare_name, akshare_id, tenure_names, tenure_ids) -> dict:
+    akshare_names = _normalize_name_list(akshare_name)
+    akshare_ids = _normalize_id_list(akshare_id)
+    tenure_names = _normalize_name_list(tenure_names)
+    tenure_ids = _normalize_id_list(tenure_ids)
+
+    name_conflict = bool(akshare_names and tenure_names and not set(akshare_names).intersection(tenure_names))
+    id_conflict = bool(akshare_ids and tenure_ids and not set(akshare_ids).intersection(tenure_ids))
+    has_conflict = name_conflict or id_conflict
+
+    reasons = []
+    if name_conflict:
+        reasons.append(
+            f"AKShare经理姓名={','.join(akshare_names)} 与任职表当前经理={','.join(tenure_names)} 不一致"
+        )
+    if id_conflict:
+        reasons.append(
+            f"AKShare经理ID={','.join(akshare_ids)} 与任职表当前经理ID={','.join(tenure_ids)} 不一致"
+        )
+
+    return {
+        "has_conflict": has_conflict,
+        "name_conflict": name_conflict,
+        "id_conflict": id_conflict,
+        "akshare_manager_names": akshare_names,
+        "akshare_manager_ids": akshare_ids,
+        "tenure_current_manager_names": tenure_names,
+        "tenure_current_manager_ids": tenure_ids,
+        "authoritative_source": "tenure_history" if tenure_names or tenure_ids else "akshare",
+        "reasons": reasons,
+    }
+
+
 def _fetch_akshare_manager_info(fund_code: str) -> dict:
     """
     使用AKShare获取基金经理信息（优先数据源）
@@ -183,11 +238,13 @@ def _parse_tenure_page(html: str) -> dict:
         })
 
     # 当前经理取第一条（最新任职行）
-    current_manager_id = manager_ids[0] if manager_ids else None
+    current_manager_ids = tenure_history[0]["manager_ids"] if tenure_history else []
+    current_manager_id = current_manager_ids[0] if current_manager_ids else (manager_ids[0] if manager_ids else None)
     current_managers = tenure_history[0]["managers"] if tenure_history else []
 
     return {
         "current_manager_id": current_manager_id,
+        "current_manager_ids": current_manager_ids,
         "current_manager_names": current_managers,
         "tenure_history": tenure_history,
         "all_manager_ids": manager_ids,
@@ -392,7 +449,18 @@ def fetch_manager_info(fund_code: str) -> dict:
         result["data_sources"].append("eastmoney_tenure_page")
     except Exception as e:
         print(f"[WARN] tenure page failed: {e}", file=sys.stderr)
-        tenure_data = {"current_manager_id": None, "tenure_history": [], "current_manager_names": []}
+        tenure_data = {
+            "current_manager_id": None,
+            "current_manager_ids": [],
+            "tenure_history": [],
+            "current_manager_names": [],
+            "all_manager_ids": [],
+        }
+
+    result["current_manager_names"] = tenure_data.get("current_manager_names", [])
+    result["current_manager_ids"] = tenure_data.get("current_manager_ids", [])
+    result["manager_name_akshare"] = akshare_data.get("manager_name") if akshare_data else None
+    result["manager_id_akshare"] = akshare_data.get("manager_id") if akshare_data else None
 
     # 合并manager_id（优先使用AKShare，其次网页）
     if not result.get("manager_id"):
@@ -404,6 +472,25 @@ def fetch_manager_info(fund_code: str) -> dict:
     # 补充经理姓名（如果AKShare未提供）
     if not result.get("manager_name"):
         result["manager_name"] = tenure_data.get("current_manager_names", [])
+
+    identity_audit = _build_identity_audit(
+        result.get("manager_name_akshare") or result.get("manager_name"),
+        result.get("manager_id_akshare") or result.get("manager_id"),
+        tenure_data.get("current_manager_names", []),
+        tenure_data.get("current_manager_ids", []),
+    )
+    result["manager_identity_audit"] = identity_audit
+    result["manager_identity_conflict"] = identity_audit["has_conflict"]
+
+    authoritative_names = identity_audit["tenure_current_manager_names"] or identity_audit["akshare_manager_names"]
+    authoritative_ids = identity_audit["tenure_current_manager_ids"] or identity_audit["akshare_manager_ids"]
+    result["authoritative_current_manager_names"] = authoritative_names
+    result["authoritative_current_manager_ids"] = authoritative_ids
+
+    if authoritative_names:
+        result["manager_name"] = " / ".join(authoritative_names)
+    if authoritative_ids:
+        result["manager_id"] = authoritative_ids[0]
 
     # ===== Step 2: 并发抓取所有出现过的经理详情页（补充深度信息）=====
     manager_ids = tenure_data.get("all_manager_ids", [])
@@ -494,6 +581,9 @@ def fetch_manager_info(fund_code: str) -> dict:
         result["note"] = f"以下字段需联网搜索补充: {', '.join(missing_fields)}"
     else:
         result["note"] = "所有核心字段已成功获取"
+
+    if result.get("manager_identity_conflict"):
+        result["note"] += "；经理顶层字段与任职表存在冲突，第四章与第二章应以 tenure_history 为准"
 
     return result
 

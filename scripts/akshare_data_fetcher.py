@@ -5,10 +5,20 @@ AKShare 基金数据获取核心模块
 封装所有 AKShare API 调用，提供统一的数据获取接口
 """
 
+import re
 import sys
+from datetime import datetime
+from io import StringIO
+
 import akshare as ak
 import pandas as pd
-from datetime import datetime
+import requests
+
+
+ARCHIVE_HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+    'Referer': 'http://fundf10.eastmoney.com/',
+}
 
 
 class AKShareFundFetcher:
@@ -71,8 +81,6 @@ class AKShareFundFetcher:
         """
         try:
             # 使用东方财富移动端 API 获取阶段涨幅
-            import requests
-            
             url = ("https://fundmobapi.eastmoney.com/FundMNewApi/FundMNPeriodIncrease"
                    f"?FCODE={self.fund_code}&deviceid=x&plat=Android&product=EFund&version=1")
             headers = {'User-Agent': 'Mozilla/5.0 (Linux; Android 12; Pixel 6) AppleWebKit/537.36 Mobile Safari/537.36'}
@@ -117,6 +125,38 @@ class AKShareFundFetcher:
         except Exception as e:
             print(f"[WARN] _fetch_performance failed: {e}", file=sys.stderr)
             return {}
+
+    def _fetch_archives_performance_table(self, table_type: str) -> pd.DataFrame:
+        """抓取东方财富基金档案业绩表。"""
+        try:
+            url = f"http://fundf10.eastmoney.com/FundArchivesDatas.aspx?type={table_type}&code={self.fund_code}"
+            headers = dict(ARCHIVE_HEADERS)
+            headers['Referer'] = f"http://fundf10.eastmoney.com/jndzf_{self.fund_code}.html"
+            resp = requests.get(url, headers=headers, timeout=15)
+            resp.encoding = 'utf-8'
+
+            match = re.search(r'content:"(.*)"\s*(?:,summary:.*)?};?\s*$', resp.text, re.S)
+            if not match:
+                return pd.DataFrame()
+
+            html = match.group(1).replace('\\"', '"').replace('\\/', '/')
+            tables = pd.read_html(StringIO(html))
+            return tables[0] if tables else pd.DataFrame()
+        except Exception as e:
+            print(f"[WARN] _fetch_archives_performance_table({table_type}) failed: {e}", file=sys.stderr)
+            return pd.DataFrame()
+
+    def _fetch_quarter_performance_history(self) -> pd.DataFrame:
+        """获取最近 8 个季度的业绩比较表。"""
+        return self._fetch_archives_performance_table('quarterzf')
+
+    def _fetch_quarter_detail_history(self) -> pd.DataFrame:
+        """获取完整季度涨幅明细表。"""
+        return self._fetch_archives_performance_table('jdndzf')
+
+    def _fetch_annual_performance_history(self) -> pd.DataFrame:
+        """获取年度业绩比较表。"""
+        return self._fetch_archives_performance_table('yearzf')
     
     def _fetch_nav_history(self) -> pd.DataFrame:
         """

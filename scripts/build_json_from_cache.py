@@ -14,7 +14,7 @@ build_json_from_cache.py — 从缓存自动组装/更新 web-platform JSON
 
 字段分类：
     A类（本脚本自动填写）：basic / fees / scale / risk / holdings.top10 /
-                          performance.annual / performance.quarterly /
+                          performance.stages / performance.annual / performance.quarterly /
                           stageAnalysis.inflectionPoints / navHistory /
                           managers.current（name/id/scale/count等）
     B类（保留已有，不覆盖）：policy / exclusionCheck / scoring / tracking /
@@ -28,11 +28,16 @@ import json
 import os
 import sys
 from datetime import date, datetime
+from typing import Optional, Union
 
 # ─── 路径配置 ──────────────────────────────────────────────────────────────
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, "../../.."))
 DATA_DIR = os.path.join(REPO_ROOT, "web-platform/public/data")
+DEFAULT_DISCLAIMER = (
+    "本报告仅供个人学习和信息整理使用，所有分析内容均不构成任何投资建议。"
+    "投资有风险，入市需谨慎，请依据自身判断做出投资决策。"
+)
 
 
 def load_cache(tmp: str, fname: str):
@@ -147,10 +152,14 @@ def map_holdings(ho: dict) -> dict:
     """holdings.json → holdings（仅 A类字段）"""
     top10 = []
     for h in ho.get("top_10_holdings", []):
+        ratio = h.get("ratio_pct")
+        if ratio is None:
+            ratio = h.get("占净值比例")
+
         top10.append({
-            "name": h.get("stock_name"),
-            "code": h.get("stock_code"),
-            "ratio": h.get("ratio_pct"),
+            "name": h.get("stock_name") or h.get("股票名称"),
+            "code": h.get("stock_code") or h.get("股票代码"),
+            "ratio": ratio,
         })
 
     # industry_distribution 可能是 dict（含 other_sectors 列表）或 list
@@ -176,28 +185,140 @@ def map_holdings(ho: dict) -> dict:
                     "ratio": s.get("ratio_pct") or s.get("占净值比例"),
                 })
 
+    top10_total_ratio = ho.get("top_10_concentration_pct")
+    if top10_total_ratio is None and top10:
+        top10_total_ratio = round(sum(item["ratio"] or 0 for item in top10), 2)
+
     return {
         "date": ho.get("report_date"),
         "top10": top10,
-        "top10TotalRatio": ho.get("top_10_concentration_pct"),
+        "top10Total": top10_total_ratio,
+        "top10TotalRatio": top10_total_ratio,
         "sectors": sectors,
     }
 
 
+def parse_percentage(value):
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return round(float(value), 2)
+
+    text = str(value).strip()
+    if not text or text in {"--", "—", "N/A"}:
+        return None
+    text = text.replace('%', '').replace(',', '')
+    try:
+        return round(float(text), 2)
+    except ValueError:
+        return None
+
+
+def parse_rank_text(value):
+    if not value:
+        return None, None
+    text = str(value).strip()
+    if '/' not in text:
+        return None, None
+
+    left, right = text.split('/', 1)
+    try:
+        rank = int(left) if left not in {'--', '—'} else None
+    except ValueError:
+        rank = None
+    try:
+        rank_total = int(right) if right not in {'--', '—'} else None
+    except ValueError:
+        rank_total = None
+    return rank, rank_total
+
+
+def map_stage_returns(fe: dict) -> list:
+    stage_specs = [
+        ("近1周", "return_1w", "return_1w_peer_avg", "return_1w_hs300", "return_1w_rank"),
+        ("近1月", "return_1m", "return_1m_peer_avg", "return_1m_hs300", "return_1m_rank"),
+        ("近3月", "return_3m", "return_3m_peer_avg", "return_3m_hs300", "return_3m_rank"),
+        ("近6月", "return_6m", "return_6m_peer_avg", "return_6m_hs300", "return_6m_rank"),
+        ("近1年", "return_1y", "return_1y_peer_avg", "return_1y_hs300", "return_1y_rank"),
+        ("近2年", "return_2y", "return_2y_peer_avg", "return_2y_hs300", "return_2y_rank"),
+        ("近3年", "return_3y", "return_3y_peer_avg", "return_3y_hs300", "return_3y_rank"),
+        ("近5年", "return_5y", "return_5y_peer_avg", "return_5y_hs300", "return_5y_rank"),
+        ("今年来", "return_ytd", "return_ytd_peer_avg", "return_ytd_hs300", "return_ytd_rank"),
+        ("成立来", "return_since_inception", None, None, None),
+    ]
+
+    stages = []
+    for period, fund_key, peer_key, hs300_key, rank_key in stage_specs:
+        fund_value = parse_percentage(fe.get(fund_key))
+        if fund_value is None:
+            continue
+
+        rank, rank_total = parse_rank_text(fe.get(rank_key)) if rank_key else (None, None)
+        stages.append({
+            "period": period,
+            "fund": fund_value,
+            "peer": parse_percentage(fe.get(peer_key)) if peer_key else None,
+            "hs300": parse_percentage(fe.get(hs300_key)) if hs300_key else None,
+            "rank": rank,
+            "rankTotal": rank_total,
+            "quartile": None,
+        })
+
+    return stages
+
+
 def map_performance(ar: dict, qr: dict) -> dict:
     """annual_returns + quarterly → performance.annual + performance.quarterly"""
+    def first_non_none(*values):
+        for value in values:
+            if value is not None:
+                return value
+        return None
+
+    def quarter_label(row: dict) -> Optional[Union[str, int]]:
+        label = row.get("quarter_label")
+        if label:
+            return label
+
+        year = row.get("year")
+        quarter = row.get("quarter")
+        if year is None or quarter is None:
+            return quarter
+
+        quarter_str = str(quarter)
+        if quarter_str.upper().startswith("Q"):
+            return f"{year}{quarter_str.upper()}"
+        if quarter_str.isdigit():
+            return f"{year}Q{quarter_str}"
+        return quarter
+
     annual = []
     for row in ar.get("annual_returns", []):
         annual.append({
             "year": row.get("year"),
-            "return": row.get("annual_return_pct"),
+            "fund": first_non_none(row.get("fund"), row.get("annual_return_pct"), row.get("return")),
+            "peer": row.get("peer"),
+            "hs300": row.get("hs300"),
+            "rank": row.get("rank"),
+            "rankTotal": first_non_none(row.get("rankTotal"), row.get("rank_total")),
+            "quartile": row.get("quartile"),
         })
     quarterly = []
     for row in qr.get("quarterly_performance", []):
         quarterly.append({
             "year": row.get("year"),
-            "quarter": row.get("quarter"),
-            "return": row.get("return_pct"),
+            "quarter": quarter_label(row),
+            "fund": first_non_none(
+                row.get("fund"),
+                row.get("quarterly_return_pct"),
+                row.get("return_pct"),
+                row.get("return"),
+            ),
+            "peer": row.get("peer"),
+            "hs300": row.get("hs300"),
+            "rank": row.get("rank"),
+            "rankTotal": first_non_none(row.get("rankTotal"), row.get("rank_total")),
+            "quartile": row.get("quartile"),
         })
     return {"annual": annual, "quarterly": quarterly}
 
@@ -262,7 +383,7 @@ B_CLASS_KEYS_HOLDINGS = {
 }
 
 B_CLASS_KEYS_PERFORMANCE = {
-    "milestones", "stages",
+    "milestones",
 }
 
 B_CLASS_KEYS_RISK = {
@@ -329,7 +450,9 @@ def main():
 
     # ── meta ──
     existing.setdefault("meta", {})
+    existing["meta"].setdefault("reportDate", date.today().isoformat())
     existing["meta"]["dataDate"] = date.today().isoformat()
+    existing["meta"].setdefault("disclaimer", DEFAULT_DISCLAIMER)
 
     # ── basic + fees ──
     if fe:
@@ -375,6 +498,9 @@ def main():
 
     # ── performance（A类部分）──
     perf_new = {}
+    if fe:
+        perf_new["stages"] = map_stage_returns(fe)
+        print(f"  ✅ performance.stages（from fund_enhanced）")
     if ar:
         perf_new["annual"] = map_performance(ar, qr or {}).get("annual", [])
         print(f"  ✅ performance.annual（from annual_returns）")

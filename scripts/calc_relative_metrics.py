@@ -7,10 +7,90 @@ P1级修复任务 - 完善第七章风险指标
 
 import sys
 import json
+import os
+import time
 import akshare as ak
 import pandas as pd
 import numpy as np
 from datetime import datetime
+
+
+def _load_nav_from_tmp(fund_code: str) -> pd.DataFrame:
+    """优先读取 /tmp 中已生成的全量净值，避免旧 AKShare 接口对老基金截断历史。"""
+    nav_path = f"/tmp/fund_research_{fund_code}/raw/nav_daily.json"
+    if not os.path.exists(nav_path):
+        return pd.DataFrame(columns=['date', 'nav'])
+
+    try:
+        with open(nav_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+
+        nav_data = data.get('nav_data') or []
+        nav_df = pd.DataFrame(nav_data)
+        if nav_df.empty:
+            return pd.DataFrame(columns=['date', 'nav'])
+
+        nav_df['date'] = pd.to_datetime(nav_df['date'])
+        nav_df['nav'] = pd.to_numeric(nav_df['nav'], errors='coerce')
+        nav_df = nav_df[['date', 'nav']].dropna().sort_values('date').reset_index(drop=True)
+        return nav_df
+    except Exception as e:
+        print(f"[WARN] 读取 /tmp 净值失败: {e}", file=sys.stderr)
+        return pd.DataFrame(columns=['date', 'nav'])
+
+
+def _fetch_benchmark_with_freshness_check(benchmark_code: str, target_end_date: pd.Timestamp) -> tuple[pd.DataFrame, str]:
+    """获取最新基准数据，并拒绝明显过期的数据源。"""
+
+    def _standardize(df: pd.DataFrame) -> pd.DataFrame:
+        if df is None or df.empty:
+            raise ValueError("基准数据为空")
+
+        date_col = next((c for c in ['日期', 'date', 'trade_date', 'datetime'] if c in df.columns), None)
+        if date_col is None:
+            raise ValueError(f"找不到日期列，现有列: {list(df.columns)}")
+        if date_col != 'date':
+            df = df.rename(columns={date_col: 'date'})
+
+        price_col = next((c for c in ['收盘', 'close', 'price', 'close_price'] if c in df.columns), None)
+        if price_col is None:
+            raise ValueError(f"找不到收盘价列，现有列: {list(df.columns)}")
+        if price_col != 'price':
+            df = df.rename(columns={price_col: 'price'})
+
+        df['date'] = pd.to_datetime(df['date'])
+        df['price'] = pd.to_numeric(df['price'], errors='coerce')
+        df = df[['date', 'price']].dropna().sort_values('date').reset_index(drop=True)
+        return df
+
+    def _is_fresh(df: pd.DataFrame) -> bool:
+        max_date = pd.to_datetime(df['date']).max()
+        # 允许基准相对基金净值滞后最多 10 个自然日；再旧则视为不可用。
+        return (target_end_date - max_date) <= pd.Timedelta(days=10)
+
+    sina_symbol = 'sh000300' if benchmark_code == '000300' else benchmark_code
+    fetchers = [
+        ("akshare_stock_zh_index_daily", lambda: ak.stock_zh_index_daily(symbol=sina_symbol), 3),
+        ("akshare_index_zh_a_hist", lambda: ak.index_zh_a_hist(symbol=benchmark_code, period="daily"), 1),
+        ("akshare_stock_zh_index_hist_csindex", lambda: ak.stock_zh_index_hist_csindex(symbol=benchmark_code), 1),
+    ]
+
+    last_error = None
+    for source_name, fetcher, retries in fetchers:
+        for attempt in range(retries):
+            try:
+                benchmark_df = _standardize(fetcher())
+                if not _is_fresh(benchmark_df):
+                    max_date = benchmark_df['date'].max().date()
+                    raise ValueError(f"基准数据过期，最新仅到 {max_date}")
+                return benchmark_df, source_name
+            except Exception as e:
+                last_error = e
+                print(f"[WARN] {source_name} 第 {attempt + 1} 次失败: {e}", file=sys.stderr)
+                if attempt < retries - 1:
+                    time.sleep(1.5)
+
+    raise ValueError(f"所有基准数据源均失败或过期: {last_error}")
 
 
 def calculate_relative_metrics(fund_code: str, benchmark_code: str = "000300") -> dict:
@@ -32,17 +112,21 @@ def calculate_relative_metrics(fund_code: str, benchmark_code: str = "000300") -
     }
     
     try:
-        # 1. 获取基金日度净值
+        # 1. 获取基金日度净值（优先使用 /tmp 中的全量历史，避免老基金被接口截断）
         print(f"[INFO] 获取基金 {fund_code} 净值数据...", file=sys.stderr)
-        fund_nav_df = ak.fund_open_fund_info_em(symbol=fund_code, indicator="单位净值走势")
-        
+        fund_nav_df = _load_nav_from_tmp(fund_code)
+
         if fund_nav_df.empty:
-            raise ValueError("基金净值数据为空")
-        
-        # 重命名列并转换日期
-        fund_nav_df = fund_nav_df.rename(columns={'净值日期': 'date', '单位净值': 'nav'})
-        fund_nav_df['date'] = pd.to_datetime(fund_nav_df['date'])
-        fund_nav_df = fund_nav_df.sort_values('date').reset_index(drop=True)
+            fund_nav_df = ak.fund_open_fund_info_em(symbol=fund_code, indicator="单位净值走势")
+            if fund_nav_df.empty:
+                raise ValueError("基金净值数据为空")
+            fund_nav_df = fund_nav_df.rename(columns={'净值日期': 'date', '单位净值': 'nav'})
+            fund_nav_df['date'] = pd.to_datetime(fund_nav_df['date'])
+            fund_nav_df['nav'] = pd.to_numeric(fund_nav_df['nav'], errors='coerce')
+            fund_nav_df = fund_nav_df[['date', 'nav']].dropna().sort_values('date').reset_index(drop=True)
+            fund_data_source = "akshare_fund_nav"
+        else:
+            fund_data_source = "tmp_nav_daily"
         
         # 计算日收益率
         fund_nav_df['return'] = fund_nav_df['nav'].pct_change()
@@ -52,57 +136,12 @@ def calculate_relative_metrics(fund_code: str, benchmark_code: str = "000300") -
         # 2. 获取基准日度收盘价（沪深300）
         print(f"[INFO] 获取基准 {benchmark_code} 数据...", file=sys.stderr)
         try:
-            # 尝试多个API，提高成功率
-            benchmark_df = None
-            
-            # 方法1: index_zh_a_hist
-            try:
-                benchmark_df = ak.index_zh_a_hist(symbol=benchmark_code, period="daily")
-                print(f"[INFO] 使用 index_zh_a_hist 获取基准数据", file=sys.stderr)
-            except Exception as e1:
-                print(f"[WARN] index_zh_a_hist 失败: {e1}", file=sys.stderr)
-                
-                # 方法2: stock_zh_index_hist_csindex (中证指数官网)
-                try:
-                    benchmark_df = ak.stock_zh_index_hist_csindex(symbol=benchmark_code)
-                    print(f"[INFO] 使用 stock_zh_index_hist_csindex 获取基准数据", file=sys.stderr)
-                except Exception as e2:
-                    print(f"[WARN] stock_zh_index_hist_csindex 失败: {e2}", file=sys.stderr)
-                    
-                    # 如果所有方法都失败，使用估算值
-                    raise ValueError(f"所有基准数据API均失败: {e1}; {e2}")
-            
-            if benchmark_df is None or benchmark_df.empty:
-                raise ValueError("基准数据为空")
-
-            # 统一重命名日期列 → 'date'
-            date_col = next(
-                (c for c in ['日期', 'date', 'trade_date', 'datetime'] if c in benchmark_df.columns),
-                None
+            benchmark_df, benchmark_source = _fetch_benchmark_with_freshness_check(
+                benchmark_code,
+                fund_nav_df['date'].max()
             )
-            if date_col is None:
-                raise ValueError(f"找不到日期列，现有列: {list(benchmark_df.columns)}")
-            if date_col != 'date':
-                benchmark_df = benchmark_df.rename(columns={date_col: 'date'})
-
-            # 统一重命名收盘价列 → 'price'
-            price_col = next(
-                (c for c in ['收盘', 'close', 'price', 'close_price'] if c in benchmark_df.columns),
-                None
-            )
-            if price_col is None:
-                raise ValueError(f"找不到收盘价列，现有列: {list(benchmark_df.columns)}")
-            if price_col != 'price':
-                benchmark_df = benchmark_df.rename(columns={price_col: 'price'})
-            
-            benchmark_df['date'] = pd.to_datetime(benchmark_df['date'])
-            benchmark_df = benchmark_df.sort_values('date').reset_index(drop=True)
-            
-            # 计算日收益率
             benchmark_df['return'] = benchmark_df['price'].pct_change()
-            
-            print(f"[INFO] 基准数据: {len(benchmark_df)} 条记录", file=sys.stderr)
-            
+            print(f"[INFO] 使用 {benchmark_source} 获取基准数据: {len(benchmark_df)} 条记录", file=sys.stderr)
         except Exception as e:
             print(f"[WARN] 获取基准数据失败: {e}，使用简化方法", file=sys.stderr)
             # 如果无法获取基准数据，返回基于基金类型的估算值
@@ -121,7 +160,7 @@ def calculate_relative_metrics(fund_code: str, benchmark_code: str = "000300") -
             result["tracking_error_annualized"] = estimate["te"]
             result["r_squared"] = estimate["r2"]
             result["note"] = f"基准数据获取失败（{str(e)[:100]}），使用行业经验估算值"
-            result["data_sources"].append("industry_estimate")
+            result["data_sources"].extend([fund_data_source, "industry_estimate"])
             return result
         
         # 3. 对齐日期
@@ -179,7 +218,7 @@ def calculate_relative_metrics(fund_code: str, benchmark_code: str = "000300") -
             "sample_size": len(merged_df),
             "start_date": str(merged_df['date'].min().date()),
             "end_date": str(merged_df['date'].max().date()),
-            "data_sources": ["akshare_fund_nav", "akshare_benchmark"]
+            "data_sources": [fund_data_source, benchmark_source]
         })
         
         print(f"[INFO] 计算完成:", file=sys.stderr)

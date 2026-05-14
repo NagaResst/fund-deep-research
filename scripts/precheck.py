@@ -141,7 +141,7 @@ def main():
         print("DATA_AGE: STALE_NAV - 净值可能过期，需重拉")
         print()
         print("NEXT_ACTION: REFRESH_NAV")
-        print("→ 重拉 nav_daily.json 和 fund_enhanced.json")
+        print("→ 重拉 nav_daily.json 和 fund_enhanced.json，并重算 risk_metrics.json / relative_metrics.json")
         print("→ 持仓/季报请检查是否为最新季度")
         if missing:
             print(f"→ 同时补跑缺失文件：{', '.join(missing)}")

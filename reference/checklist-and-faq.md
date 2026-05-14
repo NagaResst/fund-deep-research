@@ -102,6 +102,13 @@
 4. 如需精确计算，检查基准数据（沪深300）是否正常获取
 5. 样本量不足60条时会返回错误，需等待更多历史数据
 
+### Q7: `manager_info.json` 顶层经理字段和 `tenure_history` 对不上怎么办？
+**A**:
+1. 先检查 `manager_identity_conflict` 是否为 `true`
+2. 若为 `true`，当前经理认定一律以 `authoritative_current_manager_names` / `authoritative_current_manager_ids` 和 `tenure_history` 当前任职行为准
+3. 顶层 `manager_name` / `manager_id` / `current_fund_count` / `current_aum_yi` 只可用于对应 AKShare 侧经理画像，不可直接当作现任经理结论
+4. 第四章和第二章必须显式说明冲突，不要静默忽略
+
 ### Q6: 用户催促快速出结果怎么办？
 **A**:
 1. 坚持质量标准，不能牺牲完整性
@@ -201,6 +208,8 @@
 ### Step 2: 数据完整性检查
 - [ ] Step 2: 已运行 `check_data_integrity.py`，检查结果记录
 - [ ] 已识别需要联网搜索补充的字段（通常30%左右）
+- [ ] 已确认 `relative_metrics.json.end_date` 与 `nav_daily.json` 最新日期相差不超过 10 天，且未使用 `industry_estimate`
+- [ ] 若 `manager_info.json.manager_identity_conflict == true`，已记录冲突原因并确认后续章节采用 `authoritative_current_manager_names/ids + tenure_history`
 
 ### Step 3: 基础数据补充
 - [ ] Step 3: **已对N/A字段进行联网搜索补充基础数据**（至少2轮）
@@ -210,6 +219,7 @@
 - [ ] **Step 5A: 已读取 `inflection_points.json`，识别主要拐点列表（幅度≥5%，保留前30）**
 - [ ] **Step 5B: 已读取 `quarterly.json` 和 `annual_returns.json`，获取全量季度和年度数据**
 - [ ] **Step 5C: 已读取 `relative_metrics.json`，获取Beta/Alpha等相对基准指标**
+- [ ] **已核对相对指标不是旧窗口结果**（起止日期与 `nav_daily.json` 对齐）
 - [ ] **Step 5D: 已完成逐季深度复盘（盈亏-持仓-通告三维绑定）**
   - [ ] 每个季度已搜索季报原文（"投资策略和运作分析"）
   - [ ] 已对比持仓变化（加仓/减仓/新进/退出）
@@ -252,6 +262,7 @@
   - [ ] 从业年限已填写（来自AKShare）
   - [ ] 管理疲劳风险已评估
   - [ ] 学历背景已填写（如搜索到）
+  - [ ] 如存在经理身份冲突，已明确写出“以 tenure_history 为准”的处理规则
 - [ ] **第五章**：已读取 `institutional_risk.json` + `blacklist.json` + `search_log.md`（Step5-I段）
   - [ ] 合规记录已核查
   - [ ] 黑名单检查已通过

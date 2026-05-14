@@ -186,8 +186,14 @@ python skills/fund-deep-research/scripts/check_data_integrity.py <基金代码>
 - ✅ **全部有数据且时效正常** → 跳到 Step 4
 - ⚠️ **字段 N/A** → 进入 Step 3 联网搜索补充
 - ⚠️ **净值过期** → 重拉 `nav_daily.json`，重跑 Step 1 第三步
+- ⚠️ **相对指标过期/估算值** → 重算 `relative_metrics.json`，禁止带着旧 Beta/Alpha 继续写报告
 - ⚠️ **持仓过期** → 重拉 `holdings.json`，重跑 `parallel_data_collection`
 - ❌ **文件缺失** → 重跑对应 Step 1 脚本
+
+**Step 2 新增强制判定**：
+- `relative_metrics.json.end_date` 若较 `nav_daily.json` 最新日期落后超过 10 个自然日，视为**过期**，必须重算。
+- `relative_metrics.json.data_sources` 若包含 `industry_estimate`，视为**降级结果**，不得直接写入第七章和第二章。
+- `manager_info.json.manager_identity_conflict == true` 时，第四章和第二章**必须**以 `authoritative_current_manager_names` / `authoritative_current_manager_ids` / `tenure_history` 为准，不得直接引用顶层 `manager_name` / `manager_id` 做结论。
 
 ---
 
@@ -242,6 +248,14 @@ python skills/fund-deep-research/scripts/check_data_integrity.py <基金代码>
 3. 记录数据来源和日期
 4. 验证信息的时效性（优先选择最近3个月的信息）
 
+**新鲜度判定与加搜规则（强制）**：
+- 搜到结果不等于搜索完成，必须先判断内容是否足够新。
+- 若结果发布时间早于研究日期 90 天，且主题属于政策/监管/行业景气/市场环境，必须至少追加 1 轮“当年/近6个月/最新进展”搜索。
+- 若结果只覆盖历史政策、没有研究年份或近6个月的新文件/新部署/新进展，禁止直接收工，必须继续搜索。
+- 只有满足以下二选一，才可停止该主题搜索：
+   1. 已找到研究年份或近6个月内的高相关新结果；
+   2. 已明确验证“近6个月无更高优先级更新”，并把该结论写入 `search_log.md`。
+
 #### 信息整合规则
 
 - ✅ 多个来源一致 → 采用该数据
@@ -263,6 +277,7 @@ python skills/fund-deep-research/scripts/check_data_integrity.py <基金代码>
 
 2. **时效性检查**
    - 净值日期是否是最近的（T-1或当日）
+   - 相对基准指标截止日是否与净值窗口对齐（允许滞后最多 10 天）
    - 季报数据是否是最新的
    - 基金经理是否现任
 
@@ -275,6 +290,11 @@ python skills/fund-deep-research/scripts/check_data_integrity.py <基金代码>
 - 重新搜索验证
 - 标注数据疑点
 - 在报告中说明
+
+**经理口径冲突处理（强制）**：
+- 若 `manager_info.json.manager_identity_conflict == true`，先在 Step 4 明确记录冲突原因。
+- 章节写作时按以下优先级取值：`authoritative_current_manager_names / ids` > `tenure_history` 当前任职行 > 顶层 `manager_name / manager_id`。
+- 顶层字段仅可用于辅助说明 AKShare 侧画像或在管产品画像，不得直接当作“当前经理铁证”。
 
 ---
 
@@ -329,6 +349,8 @@ read_file /tmp/fund_research_{code}/raw/inflection_points.json
 1.  **获取官方通告原文（经理的“自白”）**：
     *   使用网络搜索：`"{基金名称} {年份}年第X季度报告 投资策略和运作分析"`。
     *   **目标**：提取经理对该季度操作的解释、对市场的看法以及对下一季度的展望。
+   *   **优先使用东财基金公告 API**：`/f10/JJGG?fundcode={基金代码}&type=3` 拉定期报告列表，取返回 `ID=AN...` 后拼详情页 `https://fund.eastmoney.com/gonggao/{基金代码},{AN_ID}.html` 抓正文。
+   *   **约束**：`type` 必填；不要用 `type=0` 取全部公告，需全量时循环 `type=1..6`。完整说明见 `reference/fund-announcement-api.md`。
 2.  **绑定持仓变化（经理的“动作”）**：
     *   对比本季度与上一季度的前十大重仓股，识别：加仓、减仓、新进、退出。
     *   观察行业集中度变化：是更集中了还是更分散了？
@@ -345,8 +367,13 @@ read_file /tmp/fund_research_{code}/raw/inflection_points.json
 搜索关键词：
 - "{基金名称} vs 沪深300 对比"（股票型）
 - "{基金名称} vs 中债指数 对比"（债券型）
+- "10年期国债收益率 2026 最新"（债券型必查）
+- "信用债 利差 2026"（债券型必查）
+- "{基金名称} 股票仓位 可转债仓位 最新"（二级债/固收+必查）
 - "{基金名称} Alpha Beta 信息比率"
 ```
+
+> 债券型在进入第二章前，必须先判断是**纯债 / 一级债 / 二级债 / 固收+**，不得仅用“债券型”一个标签直接套模板。
 
 #### F. 重大政策事件影响搜索（⚠️ 必须精确到文号与量化目标）
 
@@ -380,6 +407,7 @@ read_file /tmp/fund_research_{code}/raw/inflection_points.json
 - 每条政策记录：**文号 / 发布部门 / 发布日期 / 量化目标 / 补贴金额或装机目标**
 - 按政策周期分类：**红利期 / 调整期 / 修复期**，标注每段区间的净值涨跌幅
 - 填写政策对照表（详见Section 4C要求）
+- 若研究日期已进入新年份，政策表不能全部停留在更早年份；必须额外判断研究年份或近6个月内是否存在新政策/续作/实施细则/会议部署。若存在必须纳入；若不存在，必须在 `search_log.md` 明确写出“近6个月未检出更高优先级新政”。
 
 #### G. 市场周期表现搜索
 ```bash
@@ -489,6 +517,7 @@ read_file /tmp/fund_research_{code}/raw/inflection_points.json
 > 2. **4.4 节**：必须引用**至少2个季度的季报原始文字**（来自 `search_log.md` 中 `[Step5-H]` 段），每条对照实际持仓，给出 ✅⚠️❌ 判断
 > 3. **4.3 节**：必须明确写出仓位管理风格（如"全程高仓位约90%+"或"主动择时"），并说明对回撤的影响
 > 4. **4.6 节**：必须输出4维能力画像：最强能力、明显短板、适合配置的市场环境、应规避的市场环境
+> 5. 若 `manager_identity_conflict == true`，必须在 4.1 或 4.5 节显式说明：当前经理认定以 `tenure_history` 为准，并解释顶层字段为何只作辅助参考
 | 4 | **第五章** 基金公司合规评估 | `raw/institutional_risk.json` · `raw/blacklist.json` · `search_log.md`（grep `[Step5-I]` 段） |
 | 5 | **第六章** 持仓分析 | `raw/holdings.json` |
 | 6 | **第七章** 风险指标 | `raw/risk_metrics.json` · `raw/relative_metrics.json` (新增: Beta/Alpha等) |
@@ -548,6 +577,13 @@ read_file /tmp/fund_research_{code}/raw/inflection_points.json
 > ```
 > 按基金类型选择对应矩阵，三轴交叉得出五档建议。
 
+**第二章落笔前的强制判断（尤其是债券型）**：
+- 先明确基金子类型：**纯债 / 一级债 / 二级债 / 固收+**。
+- 先回答市场轴主驱动：是**利率/信用环境**，还是**权益/转债增强仓位**，或两者共同作用。
+- 若出现“净值历史分位较高”，必须先解释它是**真正高估**，还是**票息积累 / 短样本修复 / 新份额扰动导致的赔率收敛**。
+- 若 `manager_info.json` 存在经理身份冲突，第二章风险信号或结论中必须点明“当前经理识别需以 tenure_history 为准”，避免把错误经理画像写进配置建议。
+- 若这 3 个问题没有回答清楚，不得直接写出“高位谨慎 / 观望 / 谨慎”之类的结论。
+
 ---
 
 #### ✅ 质量校验（外部文件）
@@ -605,6 +641,11 @@ python3 skills/fund-deep-research/scripts/build_json_from_cache.py <基金代码
 2. 参照 **[reference/report_to_json_spec.md](reference/report_to_json_spec.md)** 中的 Prompt 模板，将规范 + 报告内容一起发给 AI
 3. AI 输出一个仅包含 B 类字段的 JSON，保存到 `/tmp/fund_research_{code}/b_fields.json`
 4. 运行合并脚本：
+
+**强约束**：
+- 以 `web-platform/public/data/003984.json` 作为当前前端渲染的 canonical 样本
+- AI 提取时必须遵循 `reference/report_to_json_spec.md` 的最新字段名，禁止沿用旧结构（如 `tracking.alerts.signal/action`、`exclusionCheck.items[]`、`scoring.risks.label/text`）
+- `merge_b_fields.py` 现在会对少量旧结构做兼容归一，但这只是兜底，不应再作为默认输出格式
 
 ```bash
 # 仅填充缺失字段（默认）

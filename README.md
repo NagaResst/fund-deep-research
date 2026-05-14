@@ -105,10 +105,15 @@ fund-deep-research/
 │   ├── report-template.md         # 报告模板
 │   ├── scoring-matrix.md          # 评分矩阵
 │   ├── checklist-and-faq.md       # 质量标准与FAQ（v2.0已更新）
+│   ├── fund-announcement-api.md   # 基金公告 API 速查
 │   └── web-platform-json-conversion.md # Web平台JSON转换指南
 └── 基金研究报告/                    # 输出目录
     └── {code}_{基金简称}_{日期}.md  # 最终报告文件
 ```
+
+## 🧭 补充速查
+
+- 基金公告、定期报告、公告详情页与 PDF 抓取方法见 `reference/fund-announcement-api.md`
 
 ## 🚀 使用方法
 
