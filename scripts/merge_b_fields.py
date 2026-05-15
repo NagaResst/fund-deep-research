@@ -19,6 +19,55 @@ REPO_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, "../../.."))
 DATA_DIR = os.path.join(REPO_ROOT, "web-platform/public/data")
 
 
+REFRESH_BY_DEFAULT_PREFIXES = (
+    "policy",
+    "exclusionCheck",
+    "scoring",
+    "tracking",
+    "stageAnalysis.stages",
+    "stageAnalysis.inflectionPoints",
+    "managers.current.education",
+    "managers.current.joinDate",
+    "managers.current.experience",
+    "managers.current.title",
+    "managers.current.style",
+    "managers.current.manageDate",
+    "managers.current.manageYears",
+    "managers.current.tenureReturn",
+    "managers.current.peerAvgReturn",
+    "managers.current.rankInPeer",
+    "managers.current.rankTotal",
+    "managers.current.historicalFunds",
+    "managers.current.philosophy",
+    "managers.current.consistencyAudit",
+    "managers.current.abilityProfile",
+    "managers.current.strengths",
+    "managers.current.weaknesses",
+    "managers.current.bestReturn",
+    "managers.current.worstReturn",
+    "managers.history",
+    "holdings.stockRatio",
+    "holdings.bondRatio",
+    "holdings.cashRatio",
+    "holdings.themeTitle",
+    "holdings.themeSubtitle",
+    "holdings.concentrationLabel",
+    "holdings.themeGroups",
+    "holdings.evolutionHighlights",
+    "holdings.policyLinks",
+    "holdings.bondStructure",
+    "performance.milestones",
+    "performance.annualNote",
+)
+
+
+def should_refresh_path(path: str) -> bool:
+    return any(
+        path == prefix or path.startswith(prefix + ".")
+        for prefix in REFRESH_BY_DEFAULT_PREFIXES
+    )
+
+
 def normalize_risk_level(level):
     mapping = {
         "高": "high",
@@ -283,16 +332,17 @@ def deep_merge(base: dict, patch: dict, overwrite: bool, path: str = "") -> list
     changes = []
     for key, val in patch.items():
         key_path = f"{path}.{key}" if path else key
+        refresh_here = overwrite or should_refresh_path(key_path)
         if key not in base or base[key] is None:
             base[key] = val
             changes.append((key_path, None, val))
         elif isinstance(val, dict) and isinstance(base.get(key), dict):
-            changes.extend(deep_merge(base[key], val, overwrite, key_path))
+            changes.extend(deep_merge(base[key], val, refresh_here, key_path))
         elif isinstance(val, list) and len(val) > 0:
-            if overwrite or not base[key]:
+            if refresh_here or not base[key]:
                 changes.append((key_path, base[key], val))
                 base[key] = val
-        elif overwrite:
+        elif refresh_here:
             if base[key] != val:
                 changes.append((key_path, base[key], val))
             base[key] = val

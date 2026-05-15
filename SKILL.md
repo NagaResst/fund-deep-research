@@ -624,7 +624,7 @@ python3 skills/fund-deep-research/scripts/build_json_from_cache.py <基金代码
 | 缓存文件 | → JSON 字段 |
 |---|---|
 | `fund_enhanced.json` | `basic.*` / `fees.*` / `scale.nav` |
-| `nav_daily.json` | `navHistory[]` |
+| `nav_daily.json` | `navHistory[]`（仅最近90个交易日，作为前端净值走势图 fallback） |
 | `holdings.json` | `holdings.top10[]` / `holdings.sectors[]` / `holdings.date` |
 | `annual_returns.json` | `performance.annual[]` |
 | `quarterly.json` | `performance.quarterly[]` |
@@ -632,6 +632,9 @@ python3 skills/fund-deep-research/scripts/build_json_from_cache.py <基金代码
 | `relative_metrics.json` | `risk.relativeMetrics.*`（beta/alpha/IR/跟踪误差） |
 | `inflection_points.json` | `stageAnalysis.inflectionPoints[]` |
 | `manager_info.json` | `managers.current.managerId/name/experience/fundCount/totalScale` |
+
+> 说明：网页概览区只展示“近一段净值走势”，实时优先走 `/api/fund/:code/history`；JSON 中的 `navHistory` 仅保留最近 90 个交易日作为静态 fallback，不再内嵌成立以来全量日度净值。
+> 说明：第三章 `stageAnalysis.stages[].period` 必须输出为 `YYYY-MM → YYYY-MM`。现有前端会把它作为拐点走势图背景色阶的 fallback 时间范围，不能再用 `2018Q2 → 2019Q2` 之类季度写法。
 
 脚本运行后会打印 B 类字段的填写状态（✅ 已有 / ❌ 缺失），方便定向补充。
 

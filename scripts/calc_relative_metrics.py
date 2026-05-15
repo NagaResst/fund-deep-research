@@ -13,6 +13,35 @@ import akshare as ak
 import pandas as pd
 import numpy as np
 from datetime import datetime
+from typing import Dict, List, Optional
+
+
+def _calculate_max_drawdown(values) -> Optional[float]:
+    if values is None or len(values) < 2:
+        return None
+
+    peaks = np.maximum.accumulate(values)
+    drawdowns = (values - peaks) / peaks
+    return round(float(drawdowns.min()), 4)
+
+
+def _calculate_yearly_benchmark_drawdowns(benchmark_df: pd.DataFrame) -> List[Dict]:
+    if benchmark_df.empty:
+        return []
+
+    yearly = []
+    for year, group in benchmark_df.groupby(benchmark_df['date'].dt.year):
+        series = group['price'].to_numpy(dtype=float)
+        max_drawdown = _calculate_max_drawdown(series)
+        if max_drawdown is None:
+            continue
+        yearly.append({
+            'year': int(year),
+            'hs300': round(abs(max_drawdown) * 100, 2),
+        })
+
+    yearly.sort(key=lambda item: item['year'], reverse=True)
+    return yearly
 
 
 def _load_nav_from_tmp(fund_code: str) -> pd.DataFrame:
@@ -141,6 +170,7 @@ def calculate_relative_metrics(fund_code: str, benchmark_code: str = "000300") -
                 fund_nav_df['date'].max()
             )
             benchmark_df['return'] = benchmark_df['price'].pct_change()
+            result['benchmark_yearly_drawdowns'] = _calculate_yearly_benchmark_drawdowns(benchmark_df)
             print(f"[INFO] 使用 {benchmark_source} 获取基准数据: {len(benchmark_df)} 条记录", file=sys.stderr)
         except Exception as e:
             print(f"[WARN] 获取基准数据失败: {e}，使用简化方法", file=sys.stderr)
@@ -159,6 +189,7 @@ def calculate_relative_metrics(fund_code: str, benchmark_code: str = "000300") -
             result["information_ratio"] = estimate["ir"]
             result["tracking_error_annualized"] = estimate["te"]
             result["r_squared"] = estimate["r2"]
+            result["benchmark_yearly_drawdowns"] = []
             result["note"] = f"基准数据获取失败（{str(e)[:100]}），使用行业经验估算值"
             result["data_sources"].extend([fund_data_source, "industry_estimate"])
             return result

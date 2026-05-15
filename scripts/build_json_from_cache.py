@@ -26,6 +26,7 @@ build_json_from_cache.py — 从缓存自动组装/更新 web-platform JSON
 
 import json
 import os
+import re
 import sys
 from datetime import date, datetime
 from typing import Optional, Union
@@ -38,6 +39,16 @@ DEFAULT_DISCLAIMER = (
     "本报告仅供个人学习和信息整理使用，所有分析内容均不构成任何投资建议。"
     "投资有风险，入市需谨慎，请依据自身判断做出投资决策。"
 )
+NAV_HISTORY_FALLBACK_LIMIT = 90
+
+REDEMPTION_RULE_LABELS = {
+    "rule_lt_7d": "持有少于7天",
+    "rule_ge_7d": "持有7天及以上",
+    "rule_7d_to_30d": "持有7天至30天",
+    "rule_30d_to_1y": "持有30天至1年",
+    "rule_1y_to_2y": "持有1年至2年",
+    "rule_ge_2y": "持有2年及以上",
+}
 
 
 def load_cache(tmp: str, fname: str):
@@ -69,22 +80,169 @@ def save_json(code: str, data: dict):
     print(f"✅  已写入 {path}")
 
 
+def first_non_none(*values):
+    for value in values:
+        if value is not None:
+            return value
+    return None
+
+
+def parse_percentage(value):
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return round(float(value), 2)
+
+    text = str(value).strip()
+    if not text or text in {"--", "—", "N/A", "---（每年）"}:
+        return None
+    match = re.search(r"-?\d+(?:\.\d+)?", text.replace(',', ''))
+    if not match:
+        return None
+    return round(float(match.group(0)), 2)
+
+
+def parse_numeric_text(value):
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return round(float(value), 4)
+
+    match = re.search(r"-?\d+(?:\.\d+)?", str(value).replace(',', ''))
+    if not match:
+        return None
+    return round(float(match.group(0)), 4)
+
+
+def normalize_date_string(value):
+    if not value:
+        return None
+
+    text = str(value).strip()
+    if not text:
+        return None
+
+    iso_match = re.match(r"^(\d{4})-(\d{2})-(\d{2})", text)
+    if iso_match:
+        return f"{iso_match.group(1)}-{iso_match.group(2)}-{iso_match.group(3)}"
+
+    cn_day_match = re.match(r"^(\d{4})年(\d{1,2})月(\d{1,2})日", text)
+    if cn_day_match:
+        return f"{cn_day_match.group(1)}-{int(cn_day_match.group(2)):02d}-{int(cn_day_match.group(3)):02d}"
+
+    quarter_match = re.match(r"^(\d{4})年([1-4])季度", text)
+    if quarter_match:
+        quarter_end = {"1": "03-31", "2": "06-30", "3": "09-30", "4": "12-31"}
+        return f"{quarter_match.group(1)}-{quarter_end[quarter_match.group(2)]}"
+
+    return None
+
+
+def split_fund_type(value):
+    text = (value or "").strip()
+    if not text:
+        return None, None
+    if "-" not in text:
+        return text, None
+    main_type, sub_type = text.split("-", 1)
+    return main_type.strip(), sub_type.strip() or None
+
+
+def combine_status(purchase_status, redemption_status):
+    purchase = (purchase_status or "").strip()
+    redemption = (redemption_status or "").strip()
+    if purchase and redemption:
+        return f"{purchase} / {redemption}"
+    return purchase or redemption or None
+
+
+def build_fee_breakdown(fe: dict):
+    management = parse_percentage(fe.get("management_fee"))
+    custodian = parse_percentage(fe.get("custodian_fee"))
+    sales_service = parse_percentage(fe.get("sales_service_fee"))
+    subscription_max = parse_percentage(fe.get("purchase_fee_original"))
+    subscription_discounted = parse_percentage(fe.get("purchase_fee_discounted"))
+
+    breakdown = []
+    if management is not None:
+        breakdown.append({"name": "管理费", "value": management})
+    if custodian is not None:
+        breakdown.append({"name": "托管费", "value": custodian})
+    if sales_service is not None:
+        breakdown.append({"name": "销售服务费", "value": sales_service})
+    if subscription_max is not None or subscription_discounted is not None:
+        item = {"name": "申购费", "value": first_non_none(subscription_max, 0)}
+        if subscription_discounted is not None:
+            item["actualRate"] = subscription_discounted
+        breakdown.append(item)
+
+    redemption_rules = fe.get("redemption_rules")
+    redemption_max = None
+    if isinstance(redemption_rules, dict):
+        rules = []
+        for key, raw_value in redemption_rules.items():
+            if key == "note":
+                continue
+            rate = parse_percentage(raw_value)
+            if rate is None:
+                continue
+            redemption_max = rate if redemption_max is None else max(redemption_max, rate)
+            rules.append({
+                "label": REDEMPTION_RULE_LABELS.get(key, key),
+                "rate": rate,
+            })
+        if redemption_max is not None:
+            item = {
+                "name": "赎回费",
+                "value": redemption_max,
+                "rate": redemption_max,
+            }
+            if rules:
+                item["rules"] = rules
+            if redemption_rules.get("note"):
+                item["note"] = redemption_rules["note"]
+            breakdown.append(item)
+
+    return {
+        "management": management,
+        "custodian": custodian,
+        "salesService": sales_service,
+        "subscriptionMax": subscription_max,
+        "subscriptionDiscounted": subscription_discounted,
+        "redemptionMax": redemption_max,
+        "breakdown": breakdown,
+    }
+
+
+def resolve_data_date(fe: Optional[dict], ho: Optional[dict], nd: Optional[dict]) -> Optional[str]:
+    candidates = [
+        normalize_date_string((fe or {}).get("current_nav_date")),
+        normalize_date_string((ho or {}).get("report_date")),
+    ]
+
+    nav_data = (nd or {}).get("nav_data") or []
+    if nav_data:
+        candidates.append(normalize_date_string(nav_data[-1].get("date")))
+
+    candidates = [candidate for candidate in candidates if candidate]
+    return max(candidates) if candidates else None
+
+
 # ─── 各模块映射函数 ─────────────────────────────────────────────────────────
 
 def map_basic(fe: dict) -> dict:
     """fund_enhanced.json → basic + fees + scale"""
-    def pct(v):
-        return round(v * 100, 4) if v is not None else None
-
     risk_code_map = {"R1": 1, "R2": 2, "R3": 3, "R4": 4, "R5": 5}
     risk_level = fe.get("risk_level", "")
     risk_code = next((v for k, v in risk_code_map.items() if k in risk_level), None)
+    fund_type, sub_type = split_fund_type(fe.get("fund_type"))
 
     basic = {
         "code": fe.get("fund_code"),
         "fullName": fe.get("full_name"),
         "shortName": fe.get("short_name"),
-        "type": fe.get("fund_type"),
+        "type": fund_type or fe.get("fund_type"),
+        "subType": sub_type,
         "riskLevel": risk_level,
         "riskCode": risk_code,
         "foundDate": fe.get("found_date"),
@@ -93,16 +251,12 @@ def map_basic(fe: dict) -> dict:
         "custodian": fe.get("custodian"),
         "benchmark": fe.get("benchmark"),
         "navFallback": fe.get("current_nav"),
-        "inceptionReturn": fe.get("return_since_inception"),
+        "navDateFallback": normalize_date_string(fe.get("current_nav_date")) or fe.get("current_nav_date"),
+        "inceptionReturn": parse_percentage(fe.get("return_since_inception")),
+        "status": combine_status(fe.get("purchase_status"), fe.get("redemption_status")),
     }
 
-    fees = {
-        "management": fe.get("management_fee"),
-        "custodian": fe.get("custodian_fee"),
-        "salesService": fe.get("sales_service_fee"),
-        "subscriptionMax": fe.get("purchase_fee_original"),
-        "breakdown": fe.get("redemption_rules", []),
-    }
+    fees = build_fee_breakdown(fe)
 
     return basic, fees
 
@@ -110,13 +264,34 @@ def map_basic(fe: dict) -> dict:
 def map_scale(fe: dict) -> dict:
     """基金规模 → scale"""
     return {
-        "nav": fe.get("fund_scale"),
-        "date": None,  # fund_enhanced 不含日期，需手动或从 holdings 取
+        "nav": parse_numeric_text(fe.get("fund_scale")),
+        "date": normalize_date_string(fe.get("current_nav_date")) or fe.get("current_nav_date"),
     }
 
 
 def map_risk(rk: dict, rm: dict, nav_data: list) -> dict:
     """risk_metrics + relative_metrics → risk（仅 A类字段）"""
+    yearly_fund = {
+        int(item.get("year")): item.get("fund")
+        for item in (rk.get("yearly_drawdowns") or [])
+        if item.get("year") is not None and item.get("fund") is not None
+    }
+    yearly_benchmark = {
+        int(item.get("year")): item.get("hs300")
+        for item in ((rm or {}).get("benchmark_yearly_drawdowns") or [])
+        if item.get("year") is not None and item.get("hs300") is not None
+    }
+    chart_years = sorted(yearly_fund, reverse=True) if yearly_fund else sorted(yearly_benchmark, reverse=True)
+    yearly_max_drawdowns = [
+        {
+            "year": year,
+            "fund": yearly_fund.get(year),
+            "hs300": yearly_benchmark.get(year),
+        }
+        for year in chart_years
+        if yearly_fund.get(year) is not None or yearly_benchmark.get(year) is not None
+    ]
+
     risk = {
         "volatility": rk.get("volatility"),
         "annualReturn": rk.get("annual_return"),
@@ -125,11 +300,15 @@ def map_risk(rk: dict, rm: dict, nav_data: list) -> dict:
         "maxDrawdown": rk.get("max_drawdown"),
         "maxDrawdownPeriod": f"{rk.get('max_drawdown_peak_date')} → {rk.get('max_drawdown_trough_date')}",
         "periodMetrics": [
-            {"label": "近1年", "volatility": rk.get("volatility_1y"), "sharpe": rk.get("sharpe_1y")},
-            {"label": "近2年", "volatility": rk.get("volatility_2y"), "sharpe": rk.get("sharpe_2y")},
-            {"label": "近3年", "volatility": rk.get("volatility_3y"), "sharpe": rk.get("sharpe_3y")},
+            {"label": "近1年", "volatility": rk.get("volatility_1y"), "sharpe": rk.get("sharpe_1y"), "maxDrawdown": rk.get("max_drawdown_1y")},
+            {"label": "近2年", "volatility": rk.get("volatility_2y"), "sharpe": rk.get("sharpe_2y"), "maxDrawdown": rk.get("max_drawdown_2y")},
+            {"label": "近3年", "volatility": rk.get("volatility_3y"), "sharpe": rk.get("sharpe_3y"), "maxDrawdown": rk.get("max_drawdown_3y")},
         ],
     }
+    if yearly_max_drawdowns:
+        risk["riskBreakdown"] = {
+            "yearlyMaxDrawdowns": yearly_max_drawdowns,
+        }
     if rm:
         risk["relativeMetrics"] = {
             "beta": rm.get("beta"),
@@ -151,15 +330,16 @@ def map_risk(rk: dict, rm: dict, nav_data: list) -> dict:
 def map_holdings(ho: dict) -> dict:
     """holdings.json → holdings（仅 A类字段）"""
     top10 = []
-    for h in ho.get("top_10_holdings", []):
+    for index, h in enumerate(ho.get("top_10_holdings", []), 1):
         ratio = h.get("ratio_pct")
         if ratio is None:
             ratio = h.get("占净值比例")
 
         top10.append({
+            "rank": first_non_none(h.get("rank"), h.get("序号"), index),
             "name": h.get("stock_name") or h.get("股票名称"),
             "code": h.get("stock_code") or h.get("股票代码"),
-            "ratio": ratio,
+            "ratio": parse_percentage(ratio),
         })
 
     # industry_distribution 可能是 dict（含 other_sectors 列表）或 list
@@ -174,15 +354,15 @@ def map_holdings(ho: dict) -> dict:
         for s in ind.get("other_sectors", []):
             if isinstance(s, dict):
                 name = s.get("行业类别") or s.get("industry")
-                ratio = s.get("占净值比例") or s.get("ratio_pct")
+                ratio = first_non_none(s.get("占净值比例"), s.get("ratio_pct"))
                 if name and ratio is not None:
-                    sectors.append({"name": name, "ratio": ratio})
+                    sectors.append({"name": name, "ratio": parse_percentage(ratio)})
     elif isinstance(ind, list):
         for s in ind:
             if isinstance(s, dict):
                 sectors.append({
                     "name": s.get("industry") or s.get("行业类别"),
-                    "ratio": s.get("ratio_pct") or s.get("占净值比例"),
+                    "ratio": parse_percentage(first_non_none(s.get("ratio_pct"), s.get("占净值比例"))),
                 })
 
     top10_total_ratio = ho.get("top_10_concentration_pct")
@@ -198,20 +378,33 @@ def map_holdings(ho: dict) -> dict:
     }
 
 
-def parse_percentage(value):
-    if value is None:
-        return None
-    if isinstance(value, (int, float)):
-        return round(float(value), 2)
+def merge_top10_metadata(existing_top10, new_top10):
+    if not isinstance(new_top10, list):
+        return new_top10
 
-    text = str(value).strip()
-    if not text or text in {"--", "—", "N/A"}:
-        return None
-    text = text.replace('%', '').replace(',', '')
-    try:
-        return round(float(text), 2)
-    except ValueError:
-        return None
+    existing_by_code = {
+        str(item.get("code")): item
+        for item in (existing_top10 or [])
+        if isinstance(item, dict) and item.get("code")
+    }
+
+    merged = []
+    for item in new_top10:
+        if not isinstance(item, dict):
+            merged.append(item)
+            continue
+
+        existing_item = existing_by_code.get(str(item.get("code")))
+        if existing_item:
+            enriched = dict(item)
+            for key in ("sector", "color"):
+                if enriched.get(key) is None and existing_item.get(key) is not None:
+                    enriched[key] = existing_item.get(key)
+            merged.append(enriched)
+        else:
+            merged.append(item)
+
+    return merged
 
 
 def parse_rank_text(value):
@@ -269,12 +462,6 @@ def map_stage_returns(fe: dict) -> list:
 
 def map_performance(ar: dict, qr: dict) -> dict:
     """annual_returns + quarterly → performance.annual + performance.quarterly"""
-    def first_non_none(*values):
-        for value in values:
-            if value is not None:
-                return value
-        return None
-
     def quarter_label(row: dict) -> Optional[Union[str, int]]:
         label = row.get("quarter_label")
         if label:
@@ -339,6 +526,132 @@ def map_inflection_points(ip: dict) -> list:
     return result
 
 
+def parse_stage_period_dates(period: str):
+    parts = [part.strip() for part in str(period or "").split("→")]
+    if len(parts) != 2:
+        return None, None
+
+    def normalize_month(text: str, is_end: bool):
+        match = re.match(r"^(\d{4})-(\d{2})$", text)
+        if match:
+            return f"{match.group(1)}-{match.group(2)}-{'28' if is_end else '01'}"
+        return normalize_date_string(text) or text
+
+    return normalize_month(parts[0], False), normalize_month(parts[1], True)
+
+
+def build_stage_ranges(stage_list: list) -> list:
+    ranges = []
+    for stage in stage_list or []:
+        if not isinstance(stage, dict):
+            continue
+        start_date, end_date = parse_stage_period_dates(stage.get("period"))
+        if not start_date or not end_date:
+            continue
+        ranges.append({
+            **stage,
+            "startDate": start_date,
+            "endDate": end_date,
+        })
+    return ranges
+
+
+def find_stage_for_point(point: dict, stage_ranges: list):
+    point_end = normalize_date_string(point.get("endDate")) or point.get("endDate")
+    if not point_end:
+        return None
+
+    point_dt = datetime.strptime(point_end, "%Y-%m-%d")
+    for stage in stage_ranges:
+        try:
+            start_dt = datetime.strptime(stage["startDate"], "%Y-%m-%d")
+            end_dt = datetime.strptime(stage["endDate"], "%Y-%m-%d")
+        except Exception:
+            continue
+        if start_dt <= point_dt <= end_dt:
+            return stage
+    return None
+
+
+def enrich_inflection_points(points: list, stage_list: list) -> list:
+    if not isinstance(points, list):
+        return points
+
+    stage_ranges = build_stage_ranges(stage_list)
+    if not stage_ranges:
+        return points
+
+    stage_by_id = {str(stage.get("id")): stage for stage in stage_ranges if stage.get("id") is not None}
+    enriched_points = []
+    for point in points:
+        if not isinstance(point, dict):
+            enriched_points.append(point)
+            continue
+
+        stage = None
+        stage_id = point.get("stageId")
+        if stage_id is not None:
+            stage = stage_by_id.get(str(stage_id))
+        if stage is None:
+            stage = find_stage_for_point(point, stage_ranges)
+
+        enriched = dict(point)
+        if stage:
+            if enriched.get("stageId") is None and stage.get("id") is not None:
+                enriched["stageId"] = stage.get("id")
+            if enriched.get("holdingsSummary") is None and stage.get("description"):
+                enriched["holdingsSummary"] = stage.get("description")
+            if enriched.get("env") is None and stage.get("env"):
+                enriched["env"] = stage.get("env")
+            if enriched.get("managerAction") is None and stage.get("managerAction"):
+                enriched["managerAction"] = stage.get("managerAction")
+            if enriched.get("attribution") is None and stage.get("attribution"):
+                enriched["attribution"] = stage.get("attribution")
+        enriched_points.append(enriched)
+    return enriched_points
+
+
+def merge_inflection_point_metadata(existing_points, new_points):
+    if not isinstance(new_points, list):
+        return new_points
+
+    existing_by_id = {
+        str(point.get("id")): point
+        for point in (existing_points or [])
+        if isinstance(point, dict) and point.get("id") is not None
+    }
+    existing_by_signature = {
+        (
+            point.get("startDate"),
+            point.get("endDate"),
+            point.get("type"),
+        ): point
+        for point in (existing_points or [])
+        if isinstance(point, dict)
+    }
+
+    merged = []
+    for point in new_points:
+        if not isinstance(point, dict):
+            merged.append(point)
+            continue
+
+        existing = existing_by_id.get(str(point.get("id")))
+        if existing is None:
+            existing = existing_by_signature.get((point.get("startDate"), point.get("endDate"), point.get("type")))
+
+        if existing:
+            enriched = dict(point)
+            for key, value in existing.items():
+                if key not in enriched and value is not None:
+                    enriched[key] = value
+            merged.append(enriched)
+        else:
+            merged.append(point)
+
+    return merged
+
+
 def map_manager(mi: dict) -> dict:
     """manager_info.json → managers.current（A类字段）"""
     # all_manager_ids：当前联席经理列表（单人管理时也有，仅1个元素）
@@ -359,8 +672,11 @@ def map_manager(mi: dict) -> dict:
 
 
 def map_nav_history(nd: dict) -> list:
-    """nav_daily.json → navHistory"""
-    return [{"date": n["date"], "nav": n["nav"]} for n in nd.get("nav_data", [])]
+    """nav_daily.json → navHistory（仅保留前端折线图 fallback 所需的最近数据）"""
+    nav_data = nd.get("nav_data", [])
+    if NAV_HISTORY_FALLBACK_LIMIT > 0:
+        nav_data = nav_data[-NAV_HISTORY_FALLBACK_LIMIT:]
+    return [{"date": n["date"], "nav": n["nav"]} for n in nav_data]
 
 
 # ─── 合并逻辑：A类覆盖，B类保留 ─────────────────────────────────────────────
@@ -372,8 +688,10 @@ B_CLASS_KEYS_TOP = {
 B_CLASS_KEYS_MANAGER = {
     "philosophy", "consistencyAudit", "abilityProfile",
     "title", "style", "strengths", "weaknesses",
+    "education", "joinDate", "experience",
+    "bestReturn", "worstReturn",
     "manageDate", "manageYears", "tenureReturn", "peerAvgReturn",
-    "rankInPeer", "rankTotal", "historicalFunds",
+    "rankInPeer", "rankTotal", "historicalFunds", "history",
 }
 
 B_CLASS_KEYS_HOLDINGS = {
@@ -424,15 +742,15 @@ def main():
 
     code = sys.argv[1].strip()
     tmp = f"/tmp/fund_research_{code}/raw"
-
-    if not os.path.isdir(tmp):
-        print(f"❌  缓存目录不存在：{tmp}")
-        print(f"    请先运行数据采集脚本（parallel_data_collection_v2.py）")
-        sys.exit(1)
+    has_cache_dir = os.path.isdir(tmp)
 
     print(f"\n═══════════════════════════════════════")
     print(f"  build_json_from_cache  基金 {code}")
     print(f"═══════════════════════════════════════\n")
+
+    if not has_cache_dir:
+        print(f"⚠️  缓存目录不存在：{tmp}")
+        print(f"    将仅基于现有 JSON 执行可回填的字段修复")
 
     # 加载缓存
     fe = load_cache(tmp, "fund_enhanced.json")
@@ -450,13 +768,15 @@ def main():
 
     # ── meta ──
     existing.setdefault("meta", {})
-    existing["meta"].setdefault("reportDate", date.today().isoformat())
-    existing["meta"]["dataDate"] = date.today().isoformat()
+    existing["meta"]["reportDate"] = date.today().isoformat()
+    data_date = resolve_data_date(fe, ho, nd)
+    existing["meta"]["dataDate"] = data_date or date.today().isoformat()
     existing["meta"].setdefault("disclaimer", DEFAULT_DISCLAIMER)
 
     # ── basic + fees ──
     if fe:
         basic_new, fees_new = map_basic(fe)
+        scale_new = map_scale(fe)
         existing.setdefault("basic", {})
         for k, v in basic_new.items():
             if v is not None:
@@ -465,10 +785,10 @@ def main():
         for k, v in fees_new.items():
             if v is not None:
                 existing["fees"][k] = v
-        # scale（nav/规模）
         existing.setdefault("scale", {})
-        if fe.get("fund_scale") is not None:
-            existing["scale"]["nav"] = fe["fund_scale"]
+        for k, v in scale_new.items():
+            if v is not None:
+                existing["scale"][k] = v
         print(f"  ✅ basic / fees / scale（from fund_enhanced）")
     else:
         print(f"  ⚠️  fund_enhanced.json 缺失，跳过 basic/fees/scale")
@@ -479,6 +799,12 @@ def main():
         risk_new = map_risk(rk, rm, nav_data)
         existing.setdefault("risk", {})
         for k, v in risk_new.items():
+            if k == "riskBreakdown" and isinstance(v, dict):
+                existing.setdefault("risk", {}).setdefault("riskBreakdown", {})
+                yearly_drawdowns = v.get("yearlyMaxDrawdowns")
+                if yearly_drawdowns:
+                    existing["risk"]["riskBreakdown"]["yearlyMaxDrawdowns"] = yearly_drawdowns
+                continue
             if k not in B_CLASS_KEYS_RISK and v is not None:
                 existing["risk"][k] = v
         print(f"  ✅ risk（from risk_metrics + relative_metrics）")
@@ -491,6 +817,8 @@ def main():
         existing.setdefault("holdings", {})
         for k, v in hmap.items():
             if k not in B_CLASS_KEYS_HOLDINGS and v is not None:
+                if k == "top10":
+                    v = merge_top10_metadata(existing["holdings"].get("top10"), v)
                 existing["holdings"][k] = v
         print(f"  ✅ holdings.top10 / sectors（from holdings）")
     else:
@@ -517,11 +845,20 @@ def main():
     if ip:
         existing.setdefault("stageAnalysis", {})
         pts = map_inflection_points(ip)
+        pts = merge_inflection_point_metadata(existing["stageAnalysis"].get("inflectionPoints"), pts)
+        pts = enrich_inflection_points(pts, existing["stageAnalysis"].get("stages", []))
         existing["stageAnalysis"]["inflectionPoints"] = pts
         existing["stageAnalysis"]["totalInflectionPoints"] = len(pts)
         print(f"  ✅ stageAnalysis.inflectionPoints（{len(pts)}个，from inflection_points）")
     else:
-        print(f"  ⚠️  inflection_points.json 缺失，跳过 stageAnalysis.inflectionPoints")
+        existing_points = ((existing.get("stageAnalysis") or {}).get("inflectionPoints"))
+        if existing_points:
+            pts = enrich_inflection_points(existing_points, (existing.get("stageAnalysis") or {}).get("stages", []))
+            existing["stageAnalysis"]["inflectionPoints"] = pts
+            existing["stageAnalysis"]["totalInflectionPoints"] = len(pts)
+            print(f"  ✅ stageAnalysis.inflectionPoints（{len(pts)}个，from existing JSON fallback）")
+        else:
+            print(f"  ⚠️  inflection_points.json 缺失，跳过 stageAnalysis.inflectionPoints")
 
     # ── managers.current（A类部分）──
     if mi:

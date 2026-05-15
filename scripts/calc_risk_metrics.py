@@ -11,6 +11,37 @@ import numpy as np
 import pandas as pd
 from akshare_data_fetcher import AKShareFundFetcher
 from datetime import datetime
+from typing import Dict, List, Optional, Tuple
+
+
+def calculate_max_drawdown(values) -> Tuple[Optional[float], Optional[int], Optional[int]]:
+    if values is None or len(values) < 2:
+        return None, None, None
+
+    peaks = np.maximum.accumulate(values)
+    drawdowns = (values - peaks) / peaks
+    trough_idx = int(np.argmin(drawdowns))
+    peak_idx = int(np.argmax(values[:trough_idx + 1]))
+    return round(float(drawdowns[trough_idx]), 4), peak_idx, trough_idx
+
+
+def calculate_yearly_drawdowns(nav_df: pd.DataFrame) -> List[Dict]:
+    if nav_df.empty:
+        return []
+
+    yearly = []
+    for year, group in nav_df.groupby(nav_df['date'].dt.year):
+        series = group['nav'].to_numpy(dtype=float)
+        max_drawdown, _, _ = calculate_max_drawdown(series)
+        if max_drawdown is None:
+            continue
+        yearly.append({
+            'year': int(year),
+            'fund': round(abs(max_drawdown) * 100, 2),
+        })
+
+    yearly.sort(key=lambda item: item['year'], reverse=True)
+    return yearly
 
 
 def calculate_risk_metrics(nav_df: pd.DataFrame) -> dict:
@@ -32,15 +63,13 @@ def calculate_risk_metrics(nav_df: pd.DataFrame) -> dict:
     result = {}
     
     # 1. 最大回撤
-    peak = np.maximum.accumulate(navs)
-    drawdown = (navs - peak) / peak
-    max_dd_idx = np.argmin(drawdown)
-    peak_idx = np.argmax(navs[:max_dd_idx + 1])
+    max_drawdown, peak_idx, max_dd_idx = calculate_max_drawdown(navs)
     
-    result['max_drawdown'] = round(float(drawdown[max_dd_idx]), 4)
-    result['max_drawdown_pct'] = f"{drawdown[max_dd_idx]:.2%}"
+    result['max_drawdown'] = max_drawdown
+    result['max_drawdown_pct'] = f"{max_drawdown:.2%}"
     result['max_drawdown_peak_date'] = str(dates[peak_idx])[:10]
     result['max_drawdown_trough_date'] = str(dates[max_dd_idx])[:10]
+    result['yearly_drawdowns'] = calculate_yearly_drawdowns(nav_df)
     
     # 2. 年化波动率
     daily_returns = np.diff(navs) / navs[:-1]
@@ -87,6 +116,10 @@ def calculate_risk_metrics(nav_df: pd.DataFrame) -> dict:
             period_annual_ret = (period_navs[-1] / period_navs[0]) ** (252 / len(period_navs)) - 1
             period_sharpe = (period_annual_ret - risk_free_rate) / period_vol if period_vol > 0 else 0
             result[f'sharpe_{period_years}y'] = round(period_sharpe, 2)
+
+            # 该期最大回撤
+            period_max_drawdown, _, _ = calculate_max_drawdown(period_navs)
+            result[f'max_drawdown_{period_years}y'] = period_max_drawdown
     
     return result
 
