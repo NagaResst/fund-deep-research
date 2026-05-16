@@ -543,7 +543,7 @@ read_file /tmp/fund_research_{code}/raw/inflection_points.json
 > - 全期指标与近期夏普指标**必须分两个子表**，不得混排
 >
 > **第九章（9.2 季度收益）**：
-> - 必须包含**沪深300同期季度收益对比行**（斜体）和**超额行**（加粗），每年3行成组
+> - 必须包含**沪深300同期季度收益对比行**（斜体）和**超额行**（加粗）
 > - 正超额季度标注 ✅，负超额季度标注 ⚠️
 >
 > **第十章（10.1 跟踪指标）**：
@@ -669,7 +669,7 @@ B 类字段对应报告章节：
 | 第四章 4.3 投资理念 | `managers.current.philosophy[]` |
 | 第四章 4.4 言行审计 | `managers.current.consistencyAudit[]` |
 | 第四章 4.6 能力画像 | `managers.current.abilityProfile{}` |
-| 第五章 排除法检查 | `exclusionCheck.items[]` |
+| 第五章 排除法检查 | `exclusionCheck[]`（⚠️ 必须是数组，每个元素包含 item/pass/note） |
 | 第六章 持仓主题 | `holdings.themeGroups[]` / `evolutionHighlights[]` |
 | 第八章 政策匹配 | `policy.tags` / `policyBreakdown[]` / `scenarios[]` |
 | 第九章 9.3 里程碑 | `performance.milestones[]` |
@@ -689,12 +689,20 @@ python3 skills/fund-deep-research/scripts/parallel_data_collection_v2.py ${CODE}
 python3 skills/fund-deep-research/scripts/build_json_from_cache.py ${CODE}
 
 # Step 4：AI 解析报告 → 保存 B 类字段 JSON
-# 参照 reference/report_to_json_spec.md 的 Prompt 模板
+# ⚠️ 重要：必须参照 reference/report_to_json_spec.md 的规范，确保 exclusionCheck 是数组格式
 # 将输出保存到 /tmp/fund_research_${CODE}/b_fields.json
 
 # Step 5：B 类字段合并
 python3 skills/fund-deep-research/scripts/merge_b_fields.py ${CODE} /tmp/fund_research_${CODE}/b_fields.json
 
-# Step 6：重新构建 Web 平台
-cd web-platform && npm run build
+# Step 6：【新增】验证 JSON 格式是否符合前端期望
+python3 skills/fund-deep-research/scripts/validate_json_schema.py ${CODE}
+
+# Step 7：重新构建 Web 平台（可选，仅在需要更新前端时执行）
+# cd web-platform && npm run build
 ```
+
+**⚠️ 重要说明**：
+- Step 6 的验证脚本会检查所有数组字段的类型和结构
+- 如果验证失败，必须先修复 B 类字段 JSON 后重新合并，不要直接构建
+- 构建步骤已改为可选，避免每次研究都强制重新构建前端
