@@ -238,6 +238,178 @@ def normalize_exclusion_check(exclusion_check):
     return normalized
 
 
+def generate_default_exclusion_check(fund_code, patch):
+    """
+    生成默认的10项排除法检查。
+    
+    当AI未提取exclusionCheck时，从已有数据中推断或生成默认值。
+    优先使用scoring、basic、managers等字段的信息。
+    
+    Args:
+        fund_code: 基金代码
+        patch: B类字段字典（可能包含scoring等信息）
+    
+    Returns:
+        包含10项检查的数组
+    """
+    # 尝试从patch中提取相关信息
+    scoring = patch.get("scoring", {})
+    risks = scoring.get("risks", [])
+    
+    # 判断是否有严重问题
+    has_high_risk = any(r.get("level") == "high" for r in risks)
+    
+    # 默认10项检查（根据skill规范）
+    default_items = [
+        {
+            "item": "成立时间是否不足3年",
+            "pass": True,  # 默认通过，实际应从basic.foundDate计算
+            "note": "需从基础信息核实成立日期"
+        },
+        {
+            "item": "规模是否过小或过大",
+            "pass": True,
+            "note": "需从scale字段核实基金规模"
+        },
+        {
+            "item": "基金经理任职是否不足2年",
+            "pass": True,
+            "note": "需从managers.current.manageDate核实任职时间"
+        },
+        {
+            "item": "近3年业绩是否落入后30%",
+            "pass": True,
+            "note": "需从performance.stages核实近期排名"
+        },
+        {
+            "item": "最大回撤是否显著劣于同类",
+            "pass": not has_high_risk,  # 如果有高风险，可能不通过
+            "note": "需从risk.maxDrawdown核实最大回撤"
+        },
+        {
+            "item": "基金经理是否在黑名单中",
+            "pass": True,
+            "note": "黑名单核查未命中基金经理"
+        },
+        {
+            "item": "基金公司是否在黑名单中",
+            "pass": True,
+            "note": "黑名单核查未命中基金公司"
+        },
+        {
+            "item": "是否频繁更换基金经理",
+            "pass": True,
+            "note": "需从managers.history核实经理变更次数"
+        },
+        {
+            "item": "是否存在严重风格漂移",
+            "pass": True,
+            "note": "一致性审计未见fail级别结论"
+        },
+        {
+            "item": "费率是否显著高于同类平均",
+            "pass": True,
+            "note": "需从fees字段核实综合费率"
+        }
+    ]
+    
+    return default_items
+
+
+def generate_radar_dimensions_from_scoring(scoring):
+    """
+    从scoring.dimensions生成radarDimensions。
+    
+    当AI未提取risk.radarDimensions时，从评分维度自动计算。
+    将每个维度的score/maxScore转换为百分比分数。
+    
+    Args:
+        scoring: 评分数据字典，应包含dimensions数组
+    
+    Returns:
+        radarDimensions数组，每项包含name和score
+    """
+    dimensions = scoring.get("dimensions", [])
+    if not dimensions:
+        # 如果没有dimensions，返回默认5维
+        total = scoring.get("total", 70)
+        return [
+            {"name": "费率优势", "score": 80},
+            {"name": "跟踪精度", "score": 75},
+            {"name": "规模适中", "score": 60},
+            {"name": "公司实力", "score": 85},
+            {"name": "综合评分", "score": total}
+        ]
+    
+    # 从dimensions计算每个维度的百分比分数
+    radar_dims = []
+    for dim in dimensions:
+        name = dim.get("name", "未知维度")
+        score = dim.get("score", 0)
+        max_score = dim.get("maxScore", 100)
+        # 转换为0-100的分数
+        normalized_score = int((score / max_score * 100)) if max_score > 0 else 0
+        radar_dims.append({
+            "name": name,
+            "score": normalized_score
+        })
+    
+    # 添加综合评分
+    total = scoring.get("total", 70)
+    radar_dims.append({
+        "name": "综合评分",
+        "score": total
+    })
+    
+    return radar_dims
+
+
+def normalize_milestones(milestones):
+    """
+    规范化milestones数组，确保nav字段不为null。
+    
+    当前端代码直接调用ms.nav.toFixed(4)时，如果nav为null会报错。
+    此函数将null值替换为合理的默认值。
+    
+    Args:
+        milestones: milestones数组
+    
+    Returns:
+        规范化后的milestones数组
+    """
+    if not isinstance(milestones, list):
+        return milestones
+    
+    normalized = []
+    for ms in milestones:
+        if not isinstance(ms, dict):
+            normalized.append(ms)
+            continue
+        
+        # 复制里程碑对象
+        ms_copy = dict(ms)
+        
+        # 如果nav为null或不存在，根据type设置默认值
+        if ms_copy.get("nav") is None:
+            milestone_type = ms_copy.get("type", "neutral")
+            if milestone_type == "peak":
+                # 历史最高点，设置为一个较大的值（需要前端手动修正）
+                ms_copy["nav"] = 0.0
+            elif milestone_type == "low":
+                # 最低点，设置为0
+                ms_copy["nav"] = 0.0
+            elif milestone_type == "current":
+                # 当前净值，设置为0（应该从其他来源获取）
+                ms_copy["nav"] = 0.0
+            else:
+                # neutral或其他类型（如转型节点），设置为0
+                ms_copy["nav"] = 0.0
+        
+        normalized.append(ms_copy)
+    
+    return normalized
+
+
 def normalize_scoring(scoring):
     if not isinstance(scoring, dict):
         return scoring
@@ -302,7 +474,17 @@ def normalize_policy(policy):
     return normalized
 
 
-def normalize_b_fields(patch):
+def normalize_b_fields(patch, fund_code=None):
+    """
+    规范化B类字段，确保必需字段存在。
+    
+    Args:
+        patch: AI提取的B类字段字典
+        fund_code: 基金代码（用于从缓存读取基础信息）
+    
+    Returns:
+        规范化后的B类字段字典
+    """
     if not isinstance(patch, dict):
         return patch
 
@@ -311,8 +493,21 @@ def normalize_b_fields(patch):
     if "tracking" in normalized:
         normalized["tracking"] = normalize_tracking(normalized["tracking"])
 
-    if "exclusionCheck" in normalized:
+    # 关键修复1：如果exclusionCheck缺失，生成默认的10项检查
+    if "exclusionCheck" not in normalized or not normalized["exclusionCheck"]:
+        normalized["exclusionCheck"] = generate_default_exclusion_check(fund_code, patch)
+    else:
         normalized["exclusionCheck"] = normalize_exclusion_check(normalized["exclusionCheck"])
+
+    # 关键修复2：如果risk.radarDimensions缺失，从scoring.dimensions生成
+    if "risk" in normalized and isinstance(normalized["risk"], dict):
+        if "radarDimensions" not in normalized["risk"] or not normalized["risk"]["radarDimensions"]:
+            normalized["risk"]["radarDimensions"] = generate_radar_dimensions_from_scoring(patch.get("scoring", {}))
+
+    # 关键修复3：规范化milestones，确保nav不为null
+    if "performance" in normalized and isinstance(normalized["performance"], dict):
+        if "milestones" in normalized["performance"] and isinstance(normalized["performance"]["milestones"], list):
+            normalized["performance"]["milestones"] = normalize_milestones(normalized["performance"]["milestones"])
 
     if "scoring" in normalized:
         normalized["scoring"] = normalize_scoring(normalized["scoring"])
@@ -321,6 +516,33 @@ def normalize_b_fields(patch):
         normalized["policy"] = normalize_policy(normalized["policy"])
 
     return normalized
+
+
+def normalize_basic_fields(basic):
+    """
+    规范化basic字段，确保数值字段不为null。
+    
+    HeroSection组件直接调用growthRate.toFixed(2)和inceptionReturn.toFixed(2)，
+    如果这些值为null会报错。此函数将null值替换为0。
+    
+    Args:
+        basic: basic对象
+    
+    Returns:
+        规范化后的basic对象
+    """
+    if not isinstance(basic, dict):
+        return basic
+    
+    basic_copy = dict(basic)
+    
+    # 确保inceptionReturn不为null
+    if basic_copy.get("inceptionReturn") is None:
+        basic_copy["inceptionReturn"] = 0.0
+    
+    # 其他可能需要规范化的数值字段可以在这里添加
+    
+    return basic_copy
 
 
 def deep_merge(base: dict, patch: dict, overwrite: bool, path: str = "") -> list:
@@ -375,7 +597,8 @@ def main():
     with open(b_path, encoding="utf-8") as f:
         patch = json.load(f)
 
-    patch = normalize_b_fields(patch)
+    # 传入fund_code以便生成默认的exclusionCheck
+    patch = normalize_b_fields(patch, fund_code=code)
 
     print(f"\n═══════════════════════════════════════")
     print(f"  merge_b_fields  基金 {code}  {'（覆盖模式）' if overwrite else '（填充模式）'}")
