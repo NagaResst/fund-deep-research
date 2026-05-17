@@ -33,6 +33,16 @@
   - `exclusionCheck` 是数组，不是 `{overallPass, items}` 对象
   - `scoring.risks[]` 使用 `type/note/level`
   - `scoring.termAdvice[]` 使用 `term/icon/level/advice`
+7. ⚠️ **必需字段检查**：以下字段绝对不能遗漏：
+  - `exclusionCheck`: 必须输出完整的10项排除法检查数组（见第10章规范）
+  - `scoring`: 包含total/grade/dimensions/risks等完整评分数据
+  - `stageAnalysis.stages`: 至少包含5个阶段的分析
+  - `risk.radarDimensions`: 评分雷达图数据（可从scoring.dimensions推断，但建议明确输出）
+
+8. 🔢 **数值字段规范**：
+  - 所有数值字段（如`inceptionReturn`、`growthRate`、`nav`等）**绝对不能为 null**
+  - 如果数据缺失或无法计算，应输出 `0` 或合理的默认值
+  - 前端代码直接调用 `.toFixed()` 方法，null会导致运行时错误
 
 字段规范见下方各章节说明。
 报告内容：
@@ -468,6 +478,7 @@
 - `riskBreakdown` 必须是对象，不是旧结构的风险条目数组
 - `recentPerf[]` 需保留 `warn/note`，以便前端高亮短期异常
 - `riskWarnings[]` 必须区分 `内部` / `外部` 风险，供前端分栏展示
+- 🔧 **Fallback机制**: 如果AI未生成`radarDimensions`，`merge_b_fields.py`脚本会从`scoring.dimensions`自动计算生成（将score/maxScore转换为百分比）
 
 ---
 
@@ -494,6 +505,11 @@
 - `low` = 最低点/回撤谷底
 - `current` = 当前净值
 - `neutral` = 成立/回到面值等中性节点
+
+**注意**：
+- ⚠️ **CRITICAL**: `nav` 字段**绝对不能为 null**，前端代码直接调用 `toFixed(4)` 会报错
+- 如果某节点确实没有净值数据（如转型节点），AI应输出 `nav: 0` 或合理的估算值
+- 🔧 **Fallback机制**: 如果AI输出的nav为null，`merge_b_fields.py`脚本会自动将其替换为0
 
 ---
 
@@ -699,11 +715,13 @@
 - 若第五章只保留摘要或表格未写全，必须回看整份报告可核验事实补齐这10项（如基础信息、业绩、风险、基金经理、黑名单、费率等章节）
 
 **注意**：
+- ⚠️ **CRITICAL**: `exclusionCheck` 是必需字段，AI提取时**绝对不能遗漏**
 - `exclusionCheck` 必须固定输出 **10项**，且按上面的顺序输出，不得因为第五章省略表格而减少条目数
 - `pass=true` 表示 **未触发一票否决**；`pass=false` 表示触发排除条件
 - `note` 必须写清楚判断依据，优先引用报告中的具体事实、数字或结论，避免空泛表述
 - 若某项在报告中确实找不到足够依据，可写 `pass: null`，但仍必须保留该项，不得删除
 - 不要输出旧结构 `overallPass/items/result/detail`，前端当前消费的是对象数组 `[{item, pass, note}]`
+- 🔧 **Fallback机制**: 如果AI未生成此字段，`merge_b_fields.py` 脚本会自动生成默认10项检查（但note会是通用提示，建议AI完整提取）
 
 ---
 

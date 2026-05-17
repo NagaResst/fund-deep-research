@@ -88,6 +88,15 @@ def first_non_none(*values):
 
 
 def parse_percentage(value):
+    """
+    解析百分比数值。
+    
+    Args:
+        value: 待解析的值
+    
+    Returns:
+        float类型的百分比数值，如果无法解析则返回None
+    """
     if value is None:
         return None
     if isinstance(value, (int, float)):
@@ -913,6 +922,14 @@ def main():
                 break
         status = "✅ 已有" if obj else "❌ 缺失"
         print(f"  {status}  {desc}（{key_path}）")
+
+    # ── 关键修复：确保basic中的数值字段不为null ──
+    if "basic" in existing and isinstance(existing["basic"], dict):
+        basic = existing["basic"]
+        # 确保inceptionReturn不为null（HeroSection组件需要）
+        if basic.get("inceptionReturn") is None:
+            basic["inceptionReturn"] = 0.0
+            print(f"  🔧 修复: basic.inceptionReturn 从 null 改为 0.0")
 
     # ── 写入 ──
     print()
