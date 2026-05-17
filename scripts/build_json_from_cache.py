@@ -123,6 +123,58 @@ def parse_numeric_text(value):
     return round(float(match.group(0)), 4)
 
 
+def parse_rank_pair(value):
+    if value is None:
+        return None, None
+
+    text = str(value).strip()
+    if not text or text in {"-", "--", "—"}:
+        return None, None
+
+    match = re.search(r"(\d+)\|(\d+)", text)
+    if not match:
+        return None, None
+    return int(match.group(1)), int(match.group(2))
+
+
+def parse_tenure_years(value):
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return round(float(value), 1)
+
+    text = str(value).strip()
+    if not text or text in {"-", "--", "—"}:
+        return None
+
+    years = 0.0
+    year_match = re.search(r"(\d+)年", text)
+    day_match = re.search(r"(\d+)天", text)
+    if year_match:
+        years += int(year_match.group(1))
+    if day_match:
+        years += int(day_match.group(1)) / 365
+    if years > 0:
+        return round(years, 1)
+
+    numeric = parse_numeric_text(text)
+    return round(numeric, 1) if numeric is not None else None
+
+
+def grade_from_rank(rank, rank_total):
+    if not rank or not rank_total:
+        return None
+
+    percentile = rank / rank_total
+    if percentile <= 0.25:
+        return "top"
+    if percentile <= 0.5:
+        return "good"
+    if percentile <= 0.75:
+        return "ok"
+    return "weak"
+
+
 def normalize_date_string(value):
     if not value:
         return None
@@ -255,7 +307,7 @@ def map_basic(fe: dict) -> dict:
         "riskLevel": risk_level,
         "riskCode": risk_code,
         "foundDate": fe.get("found_date"),
-        "manager": fe.get("company_name"),
+        "manager": fe.get("manager_name"),
         "companyShort": (fe.get("company_name") or "").replace("基金管理有限公司", "基金"),
         "custodian": fe.get("custodian"),
         "benchmark": fe.get("benchmark"),
@@ -680,6 +732,63 @@ def map_manager(mi: dict) -> dict:
     }
 
 
+def build_manager_snapshot(mi: dict, fund_code: str) -> dict:
+    funds = mi.get("managed_funds_list") or []
+    if not isinstance(funds, list) or not funds:
+        return {}
+
+    historical_funds = []
+    best_return = None
+    worst_return = None
+    current_fund = None
+
+    for fund in funds:
+        if not isinstance(fund, dict):
+            continue
+
+        tenure_return = parse_percentage(fund.get("tenure_return"))
+        rank_1y, rank_total_1y = parse_rank_pair(fund.get("rank_1y"))
+        item = {
+            "name": fund.get("fund_name"),
+            "code": str(fund.get("fund_code") or "").strip(),
+            "type": fund.get("fund_type"),
+            "tenure": fund.get("tenure_period"),
+            "return": tenure_return,
+            "rank": rank_1y,
+            "rankTotal": rank_total_1y,
+            "grade": grade_from_rank(rank_1y, rank_total_1y),
+            "isCurrent": (fund.get("end_date") or "") == "至今",
+        }
+        historical_funds.append(item)
+
+        if tenure_return is not None:
+            best_return = tenure_return if best_return is None else max(best_return, tenure_return)
+            worst_return = tenure_return if worst_return is None else min(worst_return, tenure_return)
+
+        if item["code"] == str(fund_code):
+            current_fund = fund
+
+    snapshot = {}
+    if historical_funds:
+        snapshot["historicalFunds"] = historical_funds
+    if best_return is not None:
+        snapshot["bestReturn"] = round(best_return, 2)
+    if worst_return is not None:
+        snapshot["worstReturn"] = round(worst_return, 2)
+
+    if current_fund:
+        snapshot["manageDate"] = normalize_date_string(current_fund.get("start_date"))
+        snapshot["manageYears"] = parse_tenure_years(current_fund.get("tenure_days"))
+        snapshot["tenureReturn"] = parse_percentage(current_fund.get("tenure_return"))
+        rank_1y, rank_total_1y = parse_rank_pair(current_fund.get("rank_1y"))
+        if rank_1y is not None:
+            snapshot["rankInPeer"] = rank_1y
+        if rank_total_1y is not None:
+            snapshot["rankTotal"] = rank_total_1y
+
+    return snapshot
+
+
 def map_nav_history(nd: dict) -> list:
     """nav_daily.json → navHistory（仅保留前端折线图 fallback 所需的最近数据）"""
     nav_data = nd.get("nav_data", [])
@@ -698,9 +807,7 @@ B_CLASS_KEYS_MANAGER = {
     "philosophy", "consistencyAudit", "abilityProfile",
     "title", "style", "strengths", "weaknesses",
     "education", "joinDate", "experience",
-    "bestReturn", "worstReturn",
-    "manageDate", "manageYears", "tenureReturn", "peerAvgReturn",
-    "rankInPeer", "rankTotal", "historicalFunds", "history",
+    "peerAvgReturn", "history",
 }
 
 B_CLASS_KEYS_HOLDINGS = {
@@ -872,8 +979,12 @@ def main():
     # ── managers.current（A类部分）──
     if mi:
         mgr_new = map_manager(mi)
+        mgr_snapshot = build_manager_snapshot(mi, code)
         existing.setdefault("managers", {}).setdefault("current", {})
         for k, v in mgr_new.items():
+            if k not in B_CLASS_KEYS_MANAGER and v is not None:
+                existing["managers"]["current"][k] = v
+        for k, v in mgr_snapshot.items():
             if k not in B_CLASS_KEYS_MANAGER and v is not None:
                 existing["managers"]["current"][k] = v
         # managerId / allManagerIds 总是从缓存更新（经理变更时自动刷新）
