@@ -37,16 +37,16 @@
 
 ## 🛠️ 依赖工具（必须正确使用）
 
-| 工具 | 用途 | 使用时机 |
+| 工具能力 | 用途 | 使用时机 |
 |------|------|---------|
-| `execute_command` | 运行Python脚本获取基础数据 | Step 0-1 |
-| `search_web` | **联网搜索补充非结构化数据** | **Step 3和Step 5（强制）** |
-| `fetch_content` | 读取网页详细内容 | Step 3和Step 5深入搜索时 |
-| `read_file` | 读取JSON数据文件、黑名单、政策文件 | Step 2-6各章节生成前 |
-| `create_file` | **AI直接创建研究报告** | **Step 6逐章生成** |
+| 终端执行工具（如 `execution_subagent` / `run_in_terminal`） | 运行 Python 脚本获取基础数据 | Step 0-2 |
+| 联网搜索工具 | **补充非结构化数据** | **Step 3 和 Step 5（强制）** |
+| 网页抓取工具（如 `fetch_webpage`） | 读取网页详细内容或公告正文 | Step 3 和 Step 5 深入搜索时 |
+| `read_file` | 读取 JSON 数据文件、黑名单、政策文件 | Step 2-6 各章节生成前 |
+| 文件创建/编辑工具（如 `create_file` / `apply_patch`） | **AI 直接写入研究报告** | **Step 6 逐章生成** |
 
 **关键提醒**：
-- `search_web` **不是可选的**，是必须的！用于补充30%非结构化数据
+- 联网搜索 **不是可选的**，是必须的！用于补充30%非结构化数据
 - 检测到N/A就立即搜索，不要等用户提醒
 - **报告必须由AI直接生成**，不能使用脚本自动填充模板
 - **四层架构分工明确**：
@@ -66,7 +66,7 @@
    - Layer 3 N/A → 网页抓取失败，尝试手动访问确认
    - Layer 4 N/A → **必须联网搜索补充**（这是预期行为）
 2. 参考 v2.0 已知限制：
-   - 经理学历信息约60%为空 → Step 5H 联网搜索
+  - 经理学历信息约60%为空 → 在 Step 5 外部证据采集阶段联网搜索补充
    - 赎回费规则为推断值 → 如需精确值，Step 3 搜索天天基金网
    - 风险等级为估算值 → 如需官方等级，Step 3 搜索基金合同
 3. 优先处理 P0 级缺口（影响报告核心完整性）
@@ -78,6 +78,13 @@
 3. 尝试重新运行脚本（网络波动可能导致临时失败）
 4. 如果持续失败，检查 AKShare 版本是否过旧：`pip install --upgrade akshare`
 5. 作为降级方案，使用旧版爬虫脚本或联网搜索
+
+### Q2.1: 网页抓取或搜索工具不稳定怎么办？
+**A**:
+1. 先确认是搜索工具问题、网页解析问题，还是目标站点限流/反爬。
+2. 优先切换到直连 API、终端 `requests`/`curl`、或备用网址继续抓取。
+3. 若多个来源都失败，把失败来源、失败原因和已尝试的替代源写入 `search_log.md`。
+4. 对无法继续验证的字段，显式标注“数据源缺失/接口失败”，不要编造。
 
 ### Q3: 搜索结果冲突怎么办？
 **A**:
@@ -101,6 +108,13 @@
 3. 如果使用估算值，报告中需标注"基于行业经验估算"
 4. 如需精确计算，检查基准数据（沪深300）是否正常获取
 5. 样本量不足60条时会返回错误，需等待更多历史数据
+
+### Q5.1: 季度沪深300历史对比拉不全怎么办？
+**A**:
+1. 先以 `quarterly.json` 已缓存的季度基准行为准。
+2. 若部分季度缺失，优先补抓同一基准源，再尝试备用来源。
+3. 若多个来源持续失败，不要硬补伪数据；缺失季度显式写“数据源缺失/外部基准接口失败”。
+4. 同时用 `annual_returns.json` 补足年度维度的基准对比，确保结论仍可验证。
 
 ### Q7: `manager_info.json` 顶层经理字段和 `tenure_history` 对不上怎么办？
 **A**:
@@ -154,7 +168,7 @@
 
 **处理过程**：
 1. Step 0: 运行 precheck.py，缓存检查通过
-2. Step 1: 运行 parallel_data_collection_v2.py，13秒获取11个JSON文件
+2. Step 1: 根据 `NEXT_ACTION` 执行数据动作；本案例命中 `FULL_FETCH`，因此运行 parallel_data_collection_v2.py，13秒获取11个JSON文件
    - ✅ AKShare层：基础信息、净值历史、持仓、季度业绩
    - ✅ 计算层：风险指标13项、相对基准指标6项、拐点30+、年度收益
    - ✅ 爬虫层：经理信息（在管14只、规模176.16亿、从业10年）
@@ -163,10 +177,9 @@
    - 政策文件及文号（Layer 4必需）
    - 季报原文（Layer 4必需）
 4. Step 3: 联网搜索补充基础数据（2轮）
-5. Step 5: 深度研究（60-130轮搜索）
-   - Step 5C: 逐季搜索季报原文，提取"投资策略和运作分析"
-   - Step 5E: 搜索新能源行业政策文件（发改能源〔2025〕XXX号等）
-   - Step 5G/H: 净值波段归因、经理言行一致性审计
+5. Step 4.5: 装载研究输入骨架（拐点、季度、年度、相对基准指标）
+6. Step 5: 外部证据采集与验证（季报原文、市场对比、政策原文、市场周期、合规证据）
+7. Step 5.5: 章节素材沉淀（HistorySummary / ManagerAudit / PolicySummary / PerformanceSummary / ComplianceSummary）
 6. Step 6: AI逐章生成报告（预声明-批量读取协议）
 
 **最终成果**：
@@ -191,7 +204,7 @@
 
 ### Step 0-1: 数据获取阶段
 - [ ] Step 0: 已运行 `precheck.py`，根据 NEXT_ACTION 指引执行
-- [ ] Step 1: 已运行并行脚本 `parallel_data_collection_v2.py`，成功获取11个JSON文件
+- [ ] Step 1: 已按 `NEXT_ACTION` 执行对应动作（`FULL_FETCH` 全量并行 / `PARTIAL_FETCH` 仅补缺 / `REFRESH_NAV` 刷新净值相关文件 / `SKIP_TO_STEP2` 直接跳过）
 - [ ] Step 1 验证：确认以下文件存在于 `/tmp/fund_research_{code}/raw/`：
   - [ ] `fund_enhanced.json`（含风险等级、赎回费规则）
   - [ ] `risk_metrics.json`（13项风险指标）
@@ -215,36 +228,42 @@
 - [ ] Step 3: **已对N/A字段进行联网搜索补充基础数据**（至少2轮）
 - [ ] 搜索结果已写入 `/tmp/fund_research_{code}/analysis/search_log.md`
 
-### Step 5: 深度研究（最关键！）
-- [ ] **Step 5A: 已读取 `inflection_points.json`，识别主要拐点列表（幅度≥5%，保留前30）**
-- [ ] **Step 5B: 已读取 `quarterly.json` 和 `annual_returns.json`，获取全量季度和年度数据**
-- [ ] **Step 5C: 已读取 `relative_metrics.json`，获取Beta/Alpha等相对基准指标**
+### Step 4.5: 研究输入装载
+- [ ] **Step 4.5A: 已读取 `inflection_points.json`，识别主要拐点列表（幅度≥5%，保留前30）**
+- [ ] **Step 4.5B: 已读取 `quarterly.json` 和 `annual_returns.json`，获取全量季度和年度数据**
+- [ ] **Step 4.5C: 已读取 `relative_metrics.json`，获取 Beta/Alpha 等相对基准指标**
 - [ ] **已核对相对指标不是旧窗口结果**（起止日期与 `nav_daily.json` 对齐）
-- [ ] **Step 5D: 已完成逐季深度复盘（盈亏-持仓-通告三维绑定）**
-  - [ ] 每个季度已搜索季报原文（"投资策略和运作分析"）
+
+### Step 5: 外部证据采集与验证
+- [ ] **Step 5A: 已完成季报原文与季度动作证据采集**
+  - [ ] 重点季度已搜索季报原文（"投资策略和运作分析"）
   - [ ] 已对比持仓变化（加仓/减仓/新进/退出）
   - [ ] 已关联季度盈亏与市场背景
-  - [ ] 已完成逻辑一致性审计（知行合一、归因分析）
-- [ ] **Step 5E: 已完成政策文件搜索（精确到文号与量化目标）**
-  - [ ] 已搜索历史政策文件（发改委、能源局、工信部）
-  - [ ] 已搜索最近6个月新政（2026年最新）
+  - [ ] 季报原文已用 `[Step5-QuarterlyQuote]` 标签写入 `search_log.md`
+- [ ] **Step 5B: 已完成市场对比数据搜索**
+  - [ ] 股票型已核对沪深300，债券型已核对中债/利率/信用环境（按类型适用）
+  - [ ] 相关原文已用 `[Step5-MarketCompare]` 标签写入 `search_log.md`
+- [ ] **Step 5C: 已完成政策原文与量化目标搜索**
+  - [ ] 已搜索历史政策文件（发改委、能源局、工信部等）
+  - [ ] 已搜索最近6个月新政（研究年份最新）
   - [ ] 每条政策记录包含：文号/发布部门/日期/量化目标/补贴金额
-  - [ ] 已按政策周期分类（红利期/调整期/修复期）
-- [ ] **Step 5F: 已完成市场对比数据搜索**
-- [ ] **Step 5G: 已完成净值波段归因与言行一致性审计**
-  - [ ] 每个主要拐点已完成三线叙事格式输出
-  - [ ] 外部环境：政策文号+日期/市场动态/宏观变量
-  - [ ] 经理操作：季报原文引用 + 持仓变化
-  - [ ] 归因评价：Beta贡献/Alpha贡献/言行一致性✅⚠️❌
-- [ ] **Step 5H: 已完成历任经理深度追踪与风格演变审计**（如发生过经理变更）
-  - [ ] 已分析交接期动作（重仓股重合度）
-  - [ ] 已追溯投资观念演变史
-  - [ ] 已绘制长期言行一致性画像
-- [ ] **Step 5I: 已完成机构风险扫描（一票否决项）**
+  - [ ] 政策原文已用 `[Step5-PolicyRaw]` 标签写入 `search_log.md`
+- [ ] **Step 5D: 已完成市场周期与环境证据搜索**
+  - [ ] 已补齐牛熊适应性、风格窗口、经理环境适配等证据
+  - [ ] 原文已用 `[Step5-MarketCycle]` 标签写入 `search_log.md`
+- [ ] **Step 5E: 已完成合规与机构风险证据搜索**
   - [ ] 合规红线：近3年证监会处罚或监管函
   - [ ] 舆情监控：内幕交易传闻、维权事件、负面热搜
   - [ ] 管理疲劳：经理在管产品数量/规模评估
+  - [ ] 原文已用 `[Step5-Compliance]` 标签写入 `search_log.md`
 - [ ] **Step 5 搜索日志**：所有搜索结果已追加写入 `search_log.md`，去重规则正确应用
+
+### Step 5.5: 章节素材沉淀
+- [ ] **Step 5.5A: 已生成 `[Step5-HistorySummary]`**
+- [ ] **Step 5.5B: 已生成 `[Step5-ManagerAudit]`**
+- [ ] **Step 5.5C: 已生成 `[Step5-PolicySummary]`**
+- [ ] **Step 5.5D: 已生成 `[Step5-PerformanceSummary]`**
+- [ ] **Step 5.5E: 已生成 `[Step5-ComplianceSummary]`**
 
 ### Step 6: 报告生成（严格按顺序）
 - [ ] **预声明-批量读取协议**：每章开始前已声明并批量读取所需文件
@@ -252,31 +271,34 @@
   - [ ] 风险等级已填写（R1-R5）
   - [ ] 赎回费规则已填写（5档费率）
   - [ ] 申购费原价已标注
-- [ ] **第三章**：已读取 `inflection_points.json` + `search_log.md`（Step5-C/G段）
+- [ ] **第三章**：已读取 `inflection_points.json` + `search_log.md`（`[Step5-HistorySummary]` 段）
   - [ ] 已穷举所有主要拐点的三线叙事（外部环境/经理操作/归因评价）
   - [ ] 每个拐点引用了季报原话（非转述）
   - [ ] 每个拐点标注了政策文号（如有）
-- [ ] **第四章**：已读取 `manager_info.json` + `search_log.md`（Step5-H段）
+- [ ] **第四章**：已读取 `manager_info.json` + `search_log.md`（`[Step5-QuarterlyQuote]` + `[Step5-ManagerAudit]` 段）
   - [ ] 经理在管基金数已填写（来自AKShare）
   - [ ] 经理在管总规模已填写（来自AKShare）
   - [ ] 从业年限已填写（来自AKShare）
   - [ ] 管理疲劳风险已评估
   - [ ] 学历背景已填写（如搜索到）
   - [ ] 如存在经理身份冲突，已明确写出“以 tenure_history 为准”的处理规则
-- [ ] **第五章**：已读取 `institutional_risk.json` + `blacklist.json` + `search_log.md`（Step5-I段）
+- [ ] **第五章**：已读取 `institutional_risk.json` + `blacklist.json` + `search_log.md`（`[Step5-Compliance]` + `[Step5-ComplianceSummary]` 段）
   - [ ] 合规记录已核查
   - [ ] 黑名单检查已通过
   - [ ] 一票否决结论已明确
 - [ ] **第六章**：已读取 `holdings.json`，持仓分析完整
+  - [ ] 6.3 已按成立以来全部季度输出全量逐季表
+  - [ ] 逐季表的备注/评价列遵循“有则写、无则 `—`”，没有机械逐季评论
+  - [ ] 关键调仓解读只保留重大转型节点，且已突出重点
 - [ ] **第七章**：已读取 `risk_metrics.json` + `relative_metrics.json`
   - [ ] 传统风险指标完整（夏普、最大回撤、波动率等13项）
   - [ ] 相对基准指标完整（Beta、Alpha、信息比率、跟踪误差、R²）
   - [ ] 排除法检查已执行
-- [ ] **第八章**：已读取 `search_log.md`（Step5-E段）
+- [ ] **第八章**：已读取 `search_log.md`（`[Step5-PolicyRaw]` + `[Step5-PolicySummary]` 段）
   - [ ] 政策文件列表完整（含文号和日期）
   - [ ] 政策周期判断已引用具体政策文件
   - [ ] 最近6个月新政已覆盖
-- [ ] **第九章**：已读取 `quarterly.json` + `annual_returns.json` + `search_log.md`（Step5-D/F段）
+- [ ] **第九章**：已读取 `quarterly.json` + `annual_returns.json` + `search_log.md`（`[Step5-MarketCompare]` + `[Step5-PerformanceSummary]` 段）
   - [ ] 历史业绩分析完整（阶段业绩、年度收益、季度收益）
   - [ ] 持仓演变已描述
   - [ ] 业绩归因总结已完成
@@ -294,13 +316,16 @@
 
 ### 最终质量检查
 - [ ] 报告包含全部 **10 个章节**（第一章至第十章）
+- [ ] 报告章节与小节顺序严格遵循 `reference/report-template.md`，无擅自改标题、并章、增章、删章
 - [ ] 核心字段无N/A（或N/A不超过3个）
 - [ ] 报告长度≥1500字（优质报告≥3000字）
 - [ ] 数据来源已标注（AKShare/网页抓取/联网搜索）
 - [ ] 估算值已标注"估算"并说明依据
+- [ ] 除第二章评分矩阵外，报告未出现 AI 自行猜测或临时乱算的新数值
+- [ ] 可供考据的内容已写明锚点（如文号+日期、季报季度、监管文书标题+日期、事件标题+日期）
 - [ ] 已保存到指定目录：`基金研究报告/{code}_{基金简称}_{日期}.md`
 - [ ] **转换为 JSON 时**：已确认 `manager_info.json` 中的 `manager_id` 已填入 JSON Schema
-- [ ] **转换为 JSON 时**：已同步更新 `index.json`，并运行 `cd web-platform && npm run build`
+- [ ] **转换为 JSON 时**：已同步更新 `index.json`；如需更新前端发布产物，已运行 `cd web-platform && npm run build`
 
 **只有全部打勾，才能提交报告！**
 
@@ -330,10 +355,13 @@
 
 ## 🗂️ 结构化数据转换（Web 平台 JSON）
 
-> 详细步骤、Schema 说明、字段映射、index.json 更新规则见：
-> **[reference/web-platform-json-conversion.md](reference/web-platform-json-conversion.md)**
+> 字段 Schema、B 类字段提取规范、Prompt 模板见：
+> **[reference/report_to_json_spec.md](reference/report_to_json_spec.md)**
 
-完成报告后如需转换为 Web 平台 JSON，按该文档操作，完成后运行 `cd web-platform && npm run build`。
+完成报告后如需转换为 Web 平台 JSON，按 SKILL.md 中的自动化流水线执行，并额外确认：
+- [ ] 已同步更新 `web-platform/public/data/index.json`（不存在则新增条目，存在则更新索引字段）
+- [ ] 已运行 `python3 skills/fund-deep-research/scripts/validate_json_schema.py <基金代码>`
+- [ ] 如需更新前端发布产物，已运行 `cd web-platform && npm run build`
 
 ---
 
@@ -349,8 +377,8 @@
 
 2. **新增 Checklist 项目**：
    - Step 0: precheck.py 预检流程
-   - Step 1: 11个JSON文件完整性验证清单
-   - Step 5: 深度研究详细检查点（5A-5I）
+  - Step 1: 基于 `NEXT_ACTION` 的分流执行规则与11个JSON文件完整性验证清单
+  - Step 4.5 / Step 5 / Step 5.5: 研究输入、外部证据、章节素材沉淀的分层检查点
    - Step 6: 每章预声明-批量读取协议确认
    - 新增字段检查：风险等级、赎回费规则、Beta/Alpha、在管基金统计等
 

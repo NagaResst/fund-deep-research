@@ -119,14 +119,18 @@ python skills/fund-deep-research/scripts/precheck.py <基金代码>
 | `REFRESH_NAV` | 缓存存在但净值超过1天 | 重拉 `nav_daily.json` 和 `fund_enhanced.json` |
 | `SKIP_TO_STEP2` | 缓存完整且新鲜（T-1内） | 直接跳到 Step 2 执行完整性检查 |
 
-> ⚠️ **新闻与搜索数据（`search_log.md`）无论缓存多新，每次研究都必须重新搜索并去重后写入。**  
-> 去重规则：以"标题 + 发布日期"为唯一键，已存在则跳过，新内容追加到文件末尾。
-
 ---
 
 ### Step 1：运行基础脚本获取初始数据
 
-**必须优先使用并行脚本**，一条命令同时运行11个脚本，大幅节省时间：
+**Step 1 必须严格跟随 `NEXT_ACTION` 分流执行**：
+
+- `FULL_FETCH`: 使用并行脚本一次性拉齐 11 个文件。
+- `PARTIAL_FETCH`: 仅补跑缺失文件对应脚本，不得改成全量重跑。
+- `REFRESH_NAV`: 仅刷新 `nav_daily.json` 与 `fund_enhanced.json`；若预检同时提示缺失文件，再补跑对应脚本。
+- `SKIP_TO_STEP2`: 不运行 Step 1，直接进入 Step 2。
+
+只有在 `NEXT_ACTION=FULL_FETCH` 时，才默认使用并行脚本，一条命令同时运行 11 个脚本以节省时间：
 
 > ⚠️ **所有脚本输出必须保存到 `/tmp/fund_research_{code}/raw/`，不得写入仓库目录。**
 
@@ -134,9 +138,34 @@ python skills/fund-deep-research/scripts/precheck.py <基金代码>
 CODE=<基金代码>
 TMP=/tmp/fund_research_${CODE}/raw
 
-# ✅ 一键并行执行全部 11 个数据脚本（v2增强版）
+# ✅ 仅用于 NEXT_ACTION=FULL_FETCH
 python skills/fund-deep-research/scripts/parallel_data_collection_v2.py ${CODE}
 ```
+
+### 全局原则：证据留痕与读取纪律（Step 2/3/5/5.5/6 均适用）
+
+- **证据先于结论**：所有分析、判断、章节写作都必须基于实际文件读取，不得依赖对话记忆或上文印象。
+- **`search_log.md` 是唯一联网证据账本**：新闻、政策、季报原文、市场对比、失败留痕、阶段 summary 一律写入 `/tmp/fund_research_{code}/analysis/search_log.md`。
+- **联网证据每次研究都重查**：即使缓存命中，新闻与搜索数据也必须重新搜索、去重后追加写入。
+- **原文完整留痕**：搜索结果必须保存完整原文，禁止只存摘要。格式统一为“带步骤标签的标题 + 原文内容”；各步骤只定义自己的标签规则，不重复定义通用写法。
+- **统一去重规则**：以“标题 + 发布日期”为唯一键；已存在条目跳过，新条目追加到文件末尾。
+- **对话只报结论，不贴原文**：对话中只写“结论：XXX，已写入 `search_log.md`”，不在对话窗口重复铺开原文。
+- **大文件按段读取**：`search_log.md` 可能很大，先用 `grep_search` 定位目标标题或标签，再用 `read_file` 精确读取对应行范围；禁止全量 `read_file`。
+
+### 全局原则：报告生成与文件落地（Step 6 及最终输出适用）
+
+- **报告必须由 AI 直接生成**：严禁使用 `generate_report.py` 等脚本自动生成正文。
+- **最终只保留一个报告文件**：全文直接写入 `基金研究报告/{code}_{基金简称}_{日期}.md`，不创建独立章节草稿文件。
+- **第二章必须最后编撰**：第二章是对全文的高度提炼，必须在第三章至第十章全部完成后再写，并放回第一章之后。
+
+### 全局原则：模板锁定、数据真实性与考据锚点（Step 6 及模板写作适用）
+
+- **模板锁定**：读取 `reference/report-template.md` 后，必须按模板骨架逐章逐节填写；不得擅自改标题、并章、增章、删章，或跳出模板另起结构。
+- **先搭骨架，再填内容**：开始正文前，先确认章节与小节顺序与模板一致；若模板有占位段落，替换后再交付，禁止保留占位语或改写成自由发挥版报告。
+- **数据真实性优先于表达流畅**：所有数字、日期、排名、文号、监管结论必须来自已读取文件或 `search_log.md` 原文；找不到依据就回到前序步骤补证，不得凭印象补数。
+- **除评分矩阵外禁止自行乱算**：除第二章按 `reference/scoring-matrix.md` 进行规则化加减分外，禁止临时心算或臆造新的收益率、比例、分位、排名、回撤、估值等数值。
+- **无法核验就显式说明**：若某个数值或事件经现有文件与外部证据仍无法确认，明确写“数据缺失 / 待补证 / 无法核验”，不得猜测性填空。
+- **可考据内容必须带锚点**：政策、季报原话、合规事件、经理变更、里程碑事件等可供考据的内容，必须写出读者可回查的锚点，例如文号+日期、季报季度、监管文书标题+日期、事件标题+日期。
 
 并行脚本包含（共11个，分三层执行）：
 
@@ -176,7 +205,7 @@ python skills/fund-deep-research/scripts/parallel_data_collection_v2.py ${CODE}
 
 ### Step 2：🔍 数据完整性与时效性检查（强制执行）
 
-> **先读文件，再检查**。从 `/tmp/fund_research_{code}/raw/` 读取所有 JSON，不依赖记忆。
+> **先读文件，再检查**。从 `/tmp/fund_research_{code}/raw/` 读取所有 JSON 后再判断。
 
 ```
 python skills/fund-deep-research/scripts/check_data_integrity.py <基金代码>
@@ -194,6 +223,7 @@ python skills/fund-deep-research/scripts/check_data_integrity.py <基金代码>
 - `relative_metrics.json.end_date` 若较 `nav_daily.json` 最新日期落后超过 10 个自然日，视为**过期**，必须重算。
 - `relative_metrics.json.data_sources` 若包含 `industry_estimate`，视为**降级结果**，不得直接写入第七章和第二章。
 - `manager_info.json.manager_identity_conflict == true` 时，第四章和第二章**必须**以 `authoritative_current_manager_names` / `authoritative_current_manager_ids` / `tenure_history` 为准，不得直接引用顶层 `manager_name` / `manager_id` 做结论。
+- 若 `calc_relative_metrics.py` 这类脚本将 JSON 输出到 stdout 而不是自动落盘，允许通过终端重定向写回 `/tmp/fund_research_{code}/raw/relative_metrics.json`，然后立刻重跑完整性检查确认修复生效。
 
 ---
 
@@ -201,11 +231,7 @@ python skills/fund-deep-research/scripts/check_data_integrity.py <基金代码>
 
 **如果Step 2检测到任何N/A，必须执行此步骤！**
 
-> **搜索结果存储规则**：
-> - 每轮搜索后，将结果**完整原文**追加写入 `/tmp/fund_research_{code}/analysis/search_log.md`
-> - 格式：`## [Step3-轮次N] YYYY-MM-DD 搜索关键词\n原文内容`
-> - **对话里只说"搜索结论：XXX，已写入 search_log.md"，不展开全文**
-> - 去重规则：以标题+日期为键，已存在的条目不重复写入
+> 标题标签：`## [Step3-轮次N] YYYY-MM-DD 搜索关键词\n原文内容`
 
 #### 搜索策略
 
@@ -247,6 +273,11 @@ python skills/fund-deep-research/scripts/check_data_integrity.py <基金代码>
 2. 提取关键信息
 3. 记录数据来源和日期
 4. 验证信息的时效性（优先选择最近3个月的信息）
+
+**工具降级规则（强制）**：
+- 首选当前会话可用的联网搜索和网页抓取工具。
+- 若搜索代理、网页抓取工具或浏览器型工具因网络切换、解析失败、站点限制而不可用，可退回终端直连/API/`requests`/`curl` 获取原文。
+- 降级后仍失败时，必须记录：失败来源、失败原因、已尝试的替代源，并据此决定是继续补搜还是在报告中显式标注“数据源缺失/接口失败”。
 
 **新鲜度判定与加搜规则（强制）**：
 - 搜到结果不等于搜索完成，必须先判断内容是否足够新。
@@ -298,13 +329,11 @@ python skills/fund-deep-research/scripts/check_data_integrity.py <基金代码>
 
 ---
 
-### Step 5：🔍 深度研究第4章所需数据（关键步骤·易忽略）
+### Step 4.5：📥 研究输入装载（读取已有结构化数据，不属于联网搜索）
 
-**重要提醒**：第4章“历史表现与市场/政策关联分析”需要**额外的深度联网搜索**，这部分工作容易被忽略！
+> 这一步只负责把 Step 1 已经产出的结构化输入读全、读对，为后续深度搜索提供骨架。**不要把它和联网搜索混在一起。**
 
-**必须进行以下搜索**：
-
-#### A. 净值拐点识别（第三章发展历史骨架生成·Step 1 已完成）
+#### 4.5A. 读取净值拐点骨架
 
 > `calc_inflection_points.py` 已在 Step 1 并行执行完毕，结果已保存到 `/tmp/fund_research_{code}/raw/inflection_points.json`，**无需重跑脚本**。
 
@@ -313,56 +342,53 @@ python skills/fund-deep-research/scripts/check_data_integrity.py <基金代码>
 read_file /tmp/fund_research_{code}/raw/inflection_points.json
 ```
 
-确认文件加载后，后续所有深度搜索（B/C/D/E/F）通过 `read_file` 读取该文件获取数据，不依赖记忆。字段说明：
-
-1. **拐点定义**：从局部极大値到极小値（或反向）净值变动幅度 ≥ 5%，即为一个拐点。
-2. **识别算法**：滚动 20 日高低点 → 过滤交替极値 → 按幅度排序保留前 30
+字段说明：
+1. **拐点定义**：从局部极大值到极小值（或反向）净值变动幅度 ≥ 5%，即为一个拐点。
+2. **识别算法**：滚动 20 日高低点 → 过滤交替极值 → 按幅度排序保留前 30。
 3. **每个拐点格式**：
    ```
    拐点 N：起始日期 → 结束日期，起始净值 → 结束净值，变动幅度 ±X.X%
    ```
 4. **阶段划分**：将成立至今的净值历史划分为若干“发展阶段”（通常 3-6 个阶段），每阶段包含若干拐点。
 
-#### B. 全量季度数据与年度收益（直接使用 Step 1 已有输出）
+#### 4.5B. 读取季度与年度业绩骨架
 
 > `ak_quarterly_calc.py` 和 `calc_annual_returns.py` 已在 Step 1 运行完毕，**无需重跑**。
-> 
-> - 通过 `read_file` 读取 `/tmp/fund_research_{code}/raw/quarterly.json` 作为逆季复盘骨架（含每季末净值和季度收益率；**注意**：该文件不含持仓数据，逐季持仓对毕请读取 `holdings.json` 中的 `holdings_by_period`）
-> - 通过 `read_file` 读取 `/tmp/fund_research_{code}/raw/annual_returns.json` 获取完整年度收益数据（2017-2025）
 
-#### C. 相对基准指标计算（第七章风险指标增强·Step 1已完成）
+- 通过 `read_file` 读取 `/tmp/fund_research_{code}/raw/quarterly.json` 作为逆季复盘骨架（含每季末净值和季度收益率；**注意**：该文件不含持仓数据，逐季持仓对比请读取 `holdings.json` 中的 `holdings_by_period`）。
+- 通过 `read_file` 读取 `/tmp/fund_research_{code}/raw/annual_returns.json` 获取完整年度收益数据。
 
-> `calc_relative_metrics.py` 已在 Step 1 运行完毕，输出文件为 `/tmp/fund_research_{code}/raw/relative_metrics.json`
->
-> **包含指标**：
-> - Beta值：相对沪深300的系统性风险
-> - Alpha (年化)：超额收益能力
-> - 信息比率：单位跟踪误差的超额收益
-> - 跟踪误差 (年化)：与基准的偏离程度
-> - R²：与基准的相关性
->
-> > ✅ 直接读取 JSON 文件即可，无需重新计算
+#### 4.5C. 读取相对基准指标骨架
 
-#### D. 逐季深度复盘：盈亏-持仓-通告三维绑定（核心工作）
-对于脚本输出的**每一个历史季度**，必须执行以下深度对账流程：
+> `calc_relative_metrics.py` 已在 Step 1 运行完毕，输出文件为 `/tmp/fund_research_{code}/raw/relative_metrics.json`。
 
-1.  **获取官方通告原文（经理的“自白”）**：
-    *   使用网络搜索：`"{基金名称} {年份}年第X季度报告 投资策略和运作分析"`。
-    *   **目标**：提取经理对该季度操作的解释、对市场的看法以及对下一季度的展望。
-   *   **优先使用东财基金公告 API**：`/f10/JJGG?fundcode={基金代码}&type=3` 拉定期报告列表，取返回 `ID=AN...` 后拼详情页 `https://fund.eastmoney.com/gonggao/{基金代码},{AN_ID}.html` 抓正文。
-   *   **约束**：`type` 必填；不要用 `type=0` 取全部公告，需全量时循环 `type=1..6`。完整说明见 `reference/fund-announcement-api.md`。
-2.  **绑定持仓变化（经理的“动作”）**：
-    *   对比本季度与上一季度的前十大重仓股，识别：加仓、减仓、新进、退出。
-    *   观察行业集中度变化：是更集中了还是更分散了？
-3.  **关联季度盈亏与市场背景（市场的“反馈”）**：
-    *   搜索该季度的净值增长率。
-    *   搜索该季度的宏观大事、行业政策及市场风格（如：成长vs价值）。
-4.  **逻辑一致性审计（AI 深度分析）**：
-    *   **知行合一**：经理说看好 A，实际是否加仓了 A？
-    *   **归因分析**：季度盈利是靠经理选股（Alpha），还是靠行业风口（Beta）？
-    *   **逻辑演变**：经理的投资逻辑在过去几年是否发生了漂移？
+包含指标：
+- Beta值：相对沪深300的系统性风险
+- Alpha（年化）：超额收益能力
+- 信息比率：单位跟踪误差的超额收益
+- 跟踪误差（年化）：与基准的偏离程度
+- R²：与基准的相关性
 
-#### E. 市场对比数据搜索
+> ✅ 直接读取 JSON 文件即可，无需重新计算。
+
+---
+
+### Step 5：🔍 外部证据采集与验证（只做联网搜索与原文留痕）
+
+> 这一阶段只做一件事：围绕章节需要的外部证据进行**搜索、抓取、验证、留痕**。不要在这里直接写章节结论。
+
+#### 5A. 季报原文与季度动作证据
+
+优先对以下季度执行深度对账：**最新3-5季 + 所有关键拐点对应季度 + 牛熊切换或极端回撤季度**。当历史季度很多、公告页抓取不稳定或站点明显限流时，其余季度允许退回使用 `quarterly.json` + `holdings.json` 做结构化复盘，不强制逐季抓取季报原文。
+
+对选中的重点季度，执行以下流程：
+1. 获取官方通告原文：优先使用东财基金公告 API `/f10/JJGG?fundcode={基金代码}&type=3` 拉定期报告列表，再拼详情页抓正文。
+2. 绑定持仓变化：对比本季度与上一季度前十大重仓股，识别加仓、减仓、新进、退出。
+3. 关联季度盈亏与市场背景：核对季度净值增长率、宏观大事、行业政策和市场风格。
+4. 原文留痕要求：每条季报摘录单独写入 `search_log.md`，标签使用 `[Step5-QuarterlyQuote][基金代码][YYYYQX]`。
+
+#### 5B. 市场对比证据
+
 ```bash
 搜索关键词：
 - "{基金名称} vs 沪深300 对比"（股票型）
@@ -375,7 +401,9 @@ read_file /tmp/fund_research_{code}/raw/inflection_points.json
 
 > 债券型在进入第二章前，必须先判断是**纯债 / 一级债 / 二级债 / 固收+**，不得仅用“债券型”一个标签直接套模板。
 
-#### F. 重大政策事件影响搜索（⚠️ 必须精确到文号与量化目标）
+原文留痕标签：`[Step5-MarketCompare]`
+
+#### 5C. 政策原文与量化目标证据
 
 **第1轮：历史政策文件精确搜索**
 ```
@@ -403,13 +431,15 @@ read_file /tmp/fund_research_{code}/raw/inflection_points.json
 - "{持仓行业} 供给侧 反内卷 竞争规范 2026"
 ```
 
-**搜索后必须整理**：
+搜索后必须整理：
 - 每条政策记录：**文号 / 发布部门 / 发布日期 / 量化目标 / 补贴金额或装机目标**
 - 按政策周期分类：**红利期 / 调整期 / 修复期**，标注每段区间的净值涨跌幅
-- 填写政策对照表（详见Section 4C要求）
-- 若研究日期已进入新年份，政策表不能全部停留在更早年份；必须额外判断研究年份或近6个月内是否存在新政策/续作/实施细则/会议部署。若存在必须纳入；若不存在，必须在 `search_log.md` 明确写出“近6个月未检出更高优先级新政”。
+- 若研究日期已进入新年份，政策表不能全部停留在更早年份；必须额外判断研究年份或近6个月内是否存在新政策/续作/实施细则/会议部署。若存在必须纳入；若不存在，必须在 `search_log.md` 明确写出“近6个月未检出更高优先级新政”
 
-#### G. 市场周期表现搜索
+原文留痕标签：`[Step5-PolicyRaw]`
+
+#### 5D. 市场周期与环境证据
+
 ```bash
 搜索关键词：
 - "{基金名称} 牛市 熊市 表现"
@@ -417,83 +447,86 @@ read_file /tmp/fund_research_{code}/raw/inflection_points.json
 - "{基金经理姓名} 投资风格 择时能力"
 ```
 
-#### H. 净值波段归因与言行一致性审计（AI 核心工作）
+原文留痕标签：`[Step5-MarketCycle]`
 
-> **与 Step 5C 的关系**：Step 5C 以「季度」为颗粒度逐季复盘；本节以「净值波段」为颗粒度，将跨越多季度的完整行情段作为分析单元，两者互补。Step 5C 的输出可直接作为本节的持仓素材。
-
-使用 Step 5A 识别的拐点列表（`raw/inflection_points.json`）作为分析骨架，以**波段**（相邻拐点之间的区间）为颗粒度，将季度持仓数据嵌入其中：
-
-1. **逐段搜索官方通告原文**：
-   - 关键词：`"{基金名称} {年份}年第X季度报告 投资策略和运作分析"`
-   - **目标**：提取经理在该波段对应季报中的原始文字表述
-   - **⚠️ 写入格式要求**：每条季报摘录单独标注 `[QUARTERLY_QUOTE][基金代码][YYYYQX]`，方便第四章4.4节直接检索引用
-2. **对比持仓动作**：
-   - 结合 Step 5C 的季度持仓数据，验证经理是否按说的做了
-   - **识别风险**：经理说"防守"但持仓更集中 → 标注"言行不一"
-3. **输出每段复盘（第三章3.2节三线叙事格式）**：
-   ```
-   [拐点 N]　YYYY-MM-DD前后　净值 X.XX→Y.YY　±Z.Z%
-   · 🌐 外部环境：政策<文号+日期>/ 市场动态 / 宏观变量
-   · 👤 经理操作：季报原文"……" + 持仓变化（新进/退出/加减仓）
-   · 📊 归因评价：Beta贡献X% / Alpha贡献Y% / 言行一致性✅⚠️❌ / 点评
-   ```
-4. **第四章素材归纳**（写入 `search_log.md` `[Step5-H-Summary]` 段）：
-   - 所有季报引用中，选出最能体现"言行一致"和"言行偏差"的各1-2条，注明用于4.4节
-   - 总结仓位管理风格：从各季度股票仓位数据推断"全程高仓位 / 主动择时 / 防御型"，注明用于4.3节
-
-#### I. 历任经理深度追踪与风格演变审计
-
-如果基金发生过经理变更（`fetch_manager_info.py` 输出 `manager_change_count` > 0），分析颗粒度细化到**"人"**：
-
-1. **交接期动作还原**：
-   - 对比交替前后两个季度的重仓股重合度（萧规曹随 vs 推倒重来）
-   - 观察换手率变化：新经理上任是否伴随剧烈调仓？
-2. **投资观念演变史**：
-   - 搜索经理在不同年份（牛市顶点 vs 熊市底部）的官方通告，追问逻辑是否自洽
-3. **长期言行一致性画像**：
-   - 总结过去 3-5 年整体表现，识别"口头看好但实际不买"或"高位喊话接盘"等惯性
-
-#### J. 机构风险扫描（一票否决项）
+#### 5E. 合规与机构风险证据
 
 运行 `scan_institutional_risk.py` 获取关键词，再用联网搜索逐一排查：
 - **合规红线**：近 3 年是否有证监会处罚或监管函？
 - **舆情监控**：是否有内幕交易传闻、维权事件或负面热搜？
 - **管理疲劳**：经理在管产品是否超过 10 只或规模超 500 亿？
 
-**搜索要求**：
-- 搜索轮次规则：
-  - 基础轮次（固定）：4 轮（D市场对比 / E政策 / F市场周期 / I合规舆情）
-  - 拐点对齐轮次：每个主要拐点 2-3 轮（政策事件+季报原文+行业验证）
-  - 预期总轮次 = 4 + 拐点数×2 ≈ 60-130 轮（优先覆盖变动幅度前20大拐点）
-- 每轮搜索后如需读取完整页面，使用网页抓取工具获取详细内容
-- **每轮搜索结果完整原文追加写入 `/tmp/fund_research_{code}/analysis/search_log.md`**
-  - 格式：`## [Step5-{节}-轮次N] {日期} {搜索关键词}\n{原文内容}\n`
-  - 去重规则：以"标题+发布日期"为唯一键，已存在的条目跳过
-  - **对话里只说"已写入 search_log.md，结论：XXX"，不在对话中展开全文**
-- 记录数据来源和日期
+原文留痕标签：`[Step5-Compliance]`
 
-**注意**：此步骤是生成高质量报告的关键，绝不能跳过！
+#### Step 5 统一留痕要求
+
+- 搜索轮次以**证据覆盖**为目标，不以堆轮次为目标：
+  - 固定主题至少覆盖 4 类：市场对比 / 政策 / 市场周期 / 合规舆情
+  - 季报优先覆盖：最新3-5季、幅度前8-12个主要拐点，以及至少一轮牛熊切换样本
+  - 常规总轮次通常为 15-40 轮；只有在关键证据仍不足时才继续扩展
+- 若基准数据、季报正文或政策原文经多个来源验证后仍无法稳定获取，允许停止继续横向扩源，但必须把失败原因、已验证来源和留存缺口写入 `search_log.md`，后续章节按“可验证数据 + 显式缺口说明”完成，禁止编造。
+- 每轮搜索后如需读取完整页面，使用网页抓取工具获取详细内容。
+- 本步骤只额外定义标题格式：`## [Step5-主题标签-轮次N] {日期} {搜索关键词}\n{原文内容}\n`
 
 ---
 
-### Step 6：📝 AI逐章生成研究报告（禁止使用脚本，禁止依赖记忆）
+### Step 5.5：🧠 章节素材沉淀（只做分析归档，不重新搜索）
 
-**重要**：报告必须由AI直接生成，**严禁使用任何脚本自动生成报告**！
+> 这一阶段把 Step 4.5 的结构化骨架和 Step 5 的外部证据合并，沉淀为**章节可直接消费**的 summary 标签。Step 6 只应读取这些 summary 或明确指定的原始证据，不再反向猜测 Step 5 的段落含义。
 
-#### 核心约束（违反任何一条将导致报告内容失真）
+#### 5.5A. 发展历史与阶段复盘素材
 
-- ❌ **禁止**：把搜索原文贴在对话里等 AI "记住"
-- ❌ **禁止**：跨章节靠 AI 记忆引用数据，必须 `read_file`
-- ❌ **禁止**：在第三章之前写第二章
-- ❌ **禁止**：使用 `generate_report.py` 等脚本
-- ✅ **必须**：每章生成前先 `read_file` 相关数据文件
-- ✅ **必须**：搜索结果保留完整原文（不能只存摘要）
-- ✅ **最终报告只有一个文件**：`基金研究报告/{code}_{基金简称}_{日期}.md`
+使用 `inflection_points.json`、`quarterly.json`、`annual_returns.json` 以及 `[Step5-QuarterlyQuote]`、`[Step5-MarketCycle]` 原文证据，生成：
+- 发展阶段总览
+- 关键拐点归因
+- 波段层面的外部环境与经理动作映射
+
+写入 `search_log.md` 标签：`[Step5-HistorySummary]`
+
+#### 5.5B. 经理言行一致性与能力画像素材
+
+使用 `manager_info.json`、`[Step5-QuarterlyQuote]` 原文证据以及需要时的历任经理补充搜索，生成：
+- 至少 2 个季度的言行一致性审计素材
+- 仓位管理风格判断
+- 历任经理风格演变与能力画像要点
+
+写入 `search_log.md` 标签：`[Step5-ManagerAudit]`
+
+#### 5.5C. 政策背景与匹配度素材
+
+使用 `[Step5-PolicyRaw]` 原文证据，生成：
+- 政策时间轴
+- 政策周期判断
+- 与基金持仓主线的匹配度结论
+
+写入 `search_log.md` 标签：`[Step5-PolicySummary]`
+
+#### 5.5D. 历史业绩与市场对比素材
+
+使用 `quarterly.json`、`annual_returns.json`、`[Step5-MarketCompare]`、`[Step5-MarketCycle]` 原文证据，生成：
+- 历史业绩的环境解释
+- 可验证季度的基准对比结论
+- 缺失季度的年度替代说明
+
+写入 `search_log.md` 标签：`[Step5-PerformanceSummary]`
+
+#### 5.5E. 合规结论素材
+
+使用 `institutional_risk.json`、`blacklist.json`、`[Step5-Compliance]` 原文证据，生成：
+- 公司与经理的合规结论
+- 一票否决项结论
+- 已知但未触发一票否决的风险提示
+
+写入 `search_log.md` 标签：`[Step5-ComplianceSummary]`
+
+---
+
+### Step 6：📝 AI逐章生成研究报告
 
 #### 逐章生成协议（严格按此顺序）
 
-> 每章生成后，通过 `create_file` 或 `replace_string_in_file` 将内容**追加写入最终报告文件**。  
-> 不创建独立的章节草稿文件，所有章节直接拼入最终报告。
+> ❌ **禁止**：跳过下方协议直接写整篇报告。
+> 每章生成后，首次写入使用 `create_file`，后续追加或修订使用当前会话可用的文件编辑工具（如 `apply_patch`）。
 
 **⚠️ 每章开始前必须执行「预声明-批量读取」协议（防止读取中途发生上下文压缩）：**
 
@@ -509,20 +542,20 @@ read_file /tmp/fund_research_{code}/raw/inflection_points.json
 | 生成顺序 | 章节 | 预声明并批量读取的文件（全部读完后再开始写） |
 |---------|------|----------------------------------------|
 | 1 | **第一章** 基金基本信息 | `raw/fund_enhanced.json` (含风险等级、赎回费规则) · `raw/manager_info.json` (含在管基金统计) |
-| 2 | **第三章** 基金发展历史 | `raw/inflection_points.json` · `search_log.md`（grep `[Step5-C]` `[Step5-G]` 段） |
-| 3 | **第四章** 基金经理深度分析 | `raw/manager_info.json` (含AKShare获取的在管数据) · `search_log.md`（grep `[Step5-H]` `[Step5-I]` 段） |
+| 2 | **第三章** 基金发展历史 | `raw/inflection_points.json` · `search_log.md`（grep `[Step5-HistorySummary]` 段） |
+| 3 | **第四章** 基金经理深度分析 | `raw/manager_info.json` (含AKShare获取的在管数据) · `search_log.md`（grep `[Step5-QuarterlyQuote]` `[Step5-ManagerAudit]` 段） |
 
 > **第四章强制写作要求**（未满足则章节不合格）：
 > 1. **4.2 节**：必须逐行列出经理名下**所有**在管基金（来自 `manager_info.json`），包含代码、任期、总回报、同类排名
-> 2. **4.4 节**：必须引用**至少2个季度的季报原始文字**（来自 `search_log.md` 中 `[Step5-H]` 段），每条对照实际持仓，给出 ✅⚠️❌ 判断
+> 2. **4.4 节**：必须引用**至少2个季度的季报原始文字**（来自 `search_log.md` 中 `[Step5-QuarterlyQuote]` 段），每条对照实际持仓，给出 ✅⚠️❌ 判断
 > 3. **4.3 节**：必须明确写出仓位管理风格（如"全程高仓位约90%+"或"主动择时"），并说明对回撤的影响
 > 4. **4.6 节**：必须输出4维能力画像：最强能力、明显短板、适合配置的市场环境、应规避的市场环境
 > 5. 若 `manager_identity_conflict == true`，必须在 4.1 或 4.5 节显式说明：当前经理认定以 `tenure_history` 为准，并解释顶层字段为何只作辅助参考
-| 4 | **第五章** 基金公司合规评估 | `raw/institutional_risk.json` · `raw/blacklist.json` · `search_log.md`（grep `[Step5-I]` 段） |
+| 4 | **第五章** 基金公司合规评估 | `raw/institutional_risk.json` · `raw/blacklist.json` · `search_log.md`（grep `[Step5-Compliance]` `[Step5-ComplianceSummary]` 段） |
 | 5 | **第六章** 持仓分析 | `raw/holdings.json` |
 | 6 | **第七章** 风险指标 | `raw/risk_metrics.json` · `raw/relative_metrics.json` (新增: Beta/Alpha等) |
-| 7 | **第八章** 行业与政策背景 | `search_log.md`（grep `[Step5-E]` 段） |
-| 8 | **第九章** 历史业绩分析 | `raw/quarterly.json` · `raw/annual_returns.json` · `search_log.md`（grep `[Step5-D]` `[Step5-F]` 段） |
+| 7 | **第八章** 行业与政策背景 | `search_log.md`（grep `[Step5-PolicyRaw]` `[Step5-PolicySummary]` 段） |
+| 8 | **第九章** 历史业绩分析 | `raw/quarterly.json` · `raw/annual_returns.json` · `search_log.md`（grep `[Step5-MarketCompare]` `[Step5-PerformanceSummary]` 段） |
 | 9 | **第十章** 后续跟踪计划 | 已写入的报告文件 |
 | **10** | **第二章** 综合评价与配置建议 | 已写入的报告文件 · `reference/scoring-matrix.md` |
 
@@ -533,29 +566,25 @@ read_file /tmp/fund_research_{code}/raw/inflection_points.json
 > - 只有存在 ❌ 项时才展示完整否决项表格
 >
 > **第六章（6.3 持仓演变）**：
-> - **覆盖范围：`holdings.json` 中 `holdings_by_period` 的所有季度，从成立首季到最新季报，逐季全部列出，不得截断为"近六期"**
+> - **输出必须分两层：先给“全量逐季表”，再给“关键调仓解读”**
+> - **全量逐季表的覆盖范围：`holdings.json` 中 `holdings_by_period` 的所有季度，从成立首季到最新季报，逐季全部列出，不得截断为"近六期"**
 > - 禁止列出当期重仓股名称，仅记录调整本身（新进↑ / 退出↓ / 加仓⬆ / 减仓⬇）
-> - 必须新增「行业调整（产业链位置移动）」列，描述行业层面仓位净移动（如"上游锂资源 +Xpp；中游制造 -Xpp"）
+> - 若历史季度可可靠识别行业/产业链，则新增「行业调整（产业链位置移动）」列；若 `holdings.json` 不提供历史行业字段，允许基于标的主营业务人工归类，并注明“基于标的主营业务归类”；若仍无法可靠归类，明确写“历史行业穿透数据缺失”，不得编造
 > - 必须新增「前十集中度」列和「当季净值涨跌」列
-> - 「关键调仓解读」须列出所有重大转型节点（不少于3条），每条说明判断逻辑+事后净值验证
+> - 全量逐季表中的备注/评价列遵循“**有则写、无则 `—`**”原则：只记录真正值得保留的变化或事件，语言必须简明，不得对每个季度机械输出评价
+> - 「关键调仓解读」只覆盖重大转型节点（不少于3条），每条说明判断逻辑+事后净值验证，用于突出重点而不是重复季度流水账
 >
 > **第七章（7.1 绝对风险指标）**：
 > - 全期指标与近期夏普指标**必须分两个子表**，不得混排
 >
 > **第九章（9.2 季度收益）**：
-> - 必须包含**沪深300同期季度收益对比行**（斜体）和**超额行**（加粗）
+> - 对**已有可靠基准数据**的季度，必须包含**沪深300同期季度收益对比行**（斜体）和**超额行**（加粗）
+> - 若早期季度的沪深300数据经缓存重算、API补抓和备用来源验证后仍不可得，可保留可验证区间；缺失季度必须显式标注“数据源缺失/外部基准接口失败”，并用 `annual_returns.json` 补足年度维度比较，不得伪造季度基准
 > - 正超额季度标注 ✅，负超额季度标注 ⚠️
 >
 > **第十章（10.1 跟踪指标）**：
 > - 「当前值」列**必须为量化数字或具体日期格式**（如"X.X万元/吨（YYYY-MM-DD）"）
 > - 禁止填写"底部修复中"、"N/A"、"待确认"等文字描述；若数据暂缺，填写最近可得值并注明日期
-
-> 💡 **`search_log.md` 读取优化**：该文件可能很大，不要全量 read_file。  
-> 使用 `grep_search` 定位目标段落标题（如 `## [Step5-F]`），再用 `read_file` 精确读取对应行范围。
-
-> 🔴 **强制执行顺序规则：第二章必须最后编撰！**  
-> 第二章是对全文的高度提炼，**必须在完成第三章至第十章全部内容后**，根据全文内容撰写第二章的内容，并放到第一章后面。  
-> 违反此顺序会导致第二章内容流于表面、缺乏依据。
 
 ---
 
@@ -565,7 +594,7 @@ read_file /tmp/fund_research_{code}/raw/inflection_points.json
 > ```
 > read_file skills/fund-deep-research/reference/report-template.md
 > ```
-> 全部加载完毕后，按模板骨架逐章填写。
+> 全部加载完毕后，先核对章节标题与小节顺序完全一致，再按模板骨架逐章填写。
 
 ---
 
@@ -598,10 +627,10 @@ read_file /tmp/fund_research_{code}/raw/inflection_points.json
 
 ## 🗂️ 结构化数据转换（Web 平台 JSON）
 
-> 详细步骤、Schema 说明、字段映射、index.json 更新规则见：
-> **[reference/web-platform-json-conversion.md](reference/web-platform-json-conversion.md)**
+> 字段 Schema、B 类字段提取规范、Prompt 模板见：
+> **[reference/report_to_json_spec.md](reference/report_to_json_spec.md)**
 
-完成报告后如需转换为 Web 平台 JSON，按该文档操作，完成后运行 `cd web-platform && npm run build`。
+完成报告后如需转换为 Web 平台 JSON，按下方自动化流水线执行；其中 `index.json` 不由现有脚本自动维护，需人工同步更新后再校验和构建。
 
 ---
 
@@ -656,6 +685,46 @@ python3 skills/fund-deep-research/scripts/merge_b_fields.py <基金代码> /tmp/
 
 # 强制更新已有字段
 python3 skills/fund-deep-research/scripts/merge_b_fields.py <基金代码> /tmp/fund_research_<代码>/b_fields.json --overwrite
+```
+
+#### Step C：同步更新 `web-platform/public/data/index.json`
+
+现有脚本只维护 `web-platform/public/data/{code}.json`，**不会自动更新** `web-platform/public/data/index.json`。完成 Step A 与 Step B 后，必须人工检查并同步索引。
+
+`index.json` 最小必备字段如下；若已有该基金条目则更新这些字段，若没有则新增一条：
+
+```json
+{
+   "id": "基金代码",
+   "shortName": "基金简称",
+   "type": "基金类型",
+   "subType": "基金子类型",
+   "riskLevel": "风险等级文本",
+   "riskCode": 4,
+   "return1Y": 12.34,
+   "return3Y": 56.78,
+   "score": 77,
+   "recommendation": "综合建议",
+   "recommendationType": "buy|cautious|sell|strong_buy",
+   "navFallback": 1.2345,
+   "reportDate": "YYYY-MM-DD",
+   "manager": "当前经理"
+}
+```
+
+字段来源建议：
+- `id` / `shortName` / `type` / `subType` / `riskLevel` / `riskCode` / `return1Y` / `return3Y` / `navFallback` / `manager`：以 `web-platform/public/data/{code}.json` 中已落库字段为准。
+- `score` / `recommendation` / `recommendationType`：以第二章提取并合并后的 `scoring.*` 为准。
+- `reportDate`：以本次报告文件日期为准。
+
+#### Step D：校验与按需构建
+
+```bash
+# 校验单基金 JSON 结构
+python3 skills/fund-deep-research/scripts/validate_json_schema.py <基金代码>
+
+# 如需更新前端发布产物，再构建
+cd web-platform && npm run build
 ```
 
 B 类字段对应报告章节：

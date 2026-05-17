@@ -112,7 +112,7 @@ fund-deep-research/
 │   ├── scoring-matrix.md          # 评分矩阵
 │   ├── checklist-and-faq.md       # 质量标准与FAQ（v2.0已更新）
 │   ├── fund-announcement-api.md   # 基金公告 API 速查
-│   └── web-platform-json-conversion.md # Web平台JSON转换指南
+│   └── report_to_json_spec.md     # 报告提取为 Web JSON 的字段规范
 └── 基金研究报告/                    # 输出目录
     └── {code}_{基金简称}_{日期}.md  # 最终报告文件
 ```
@@ -133,12 +133,14 @@ fund-deep-research/
 
 AI会自动执行以下步骤：
 1. **Step 0**: 运行 `precheck.py` 进行预检与缓存管理
-2. **Step 1**: 运行 `parallel_data_collection_v2.py` 并行获取11个JSON文件（13秒）
+2. **Step 1**: 根据 `NEXT_ACTION` 执行数据动作：`FULL_FETCH` 全量并行、`PARTIAL_FETCH` 仅补缺、`REFRESH_NAV` 仅刷新净值相关文件、`SKIP_TO_STEP2` 直接跳过
 3. **Step 2**: 运行 `check_data_integrity.py` 检查数据完整性
 4. **Step 3**: 对N/A字段进行联网搜索补充（2-4轮）
-5. **Step 5**: 深度研究（60-130轮搜索：季报原文、政策文件、拐点归因等）
-6. **Step 6**: AI逐章生成10章节完整报告（预声明-批量读取协议）
-7. 保存到`基金研究报告/`目录
+5. **Step 4.5**: 装载研究输入骨架（拐点、季度、年度、相对基准指标）
+6. **Step 5**: 采集外部证据并写入 `search_log.md`（季报原文、市场对比、政策原文、市场周期、合规证据）
+7. **Step 5.5**: 将证据沉淀为章节可直接消费的 summary 标签
+8. **Step 6**: AI逐章生成10章节完整报告（预声明-批量读取协议）
+9. 保存到`基金研究报告/`目录
 
 ### 方式二：直接运行脚本
 
@@ -173,14 +175,14 @@ python skills/fund-deep-research/scripts/check_blacklist.py 003984
 #### 2. 运行并行收集脚本（推荐）
 
 ```bash
-# 一键并行执行全部11个数据脚本（v2增强版）
+# 仅当 NEXT_ACTION=FULL_FETCH 时使用
 python skills/fund-deep-research/scripts/parallel_data_collection_v2.py 003984
 ```
 
 这会自动：
 - 并发执行 Layer 1 (4个AKShare脚本)
 - 并发执行 Layer 2 (4个计算脚本)
-- 串行执行 Layer 3 (3个爬虫+搜索脚本)
+- 串行执行 Layer 3 (3个旧版深度数据脚本：经理信息、机构风险、黑名单检查)
 - 输出11个JSON文件到 `/tmp/fund_research_003984/raw/`
 
 #### 3. 运行预检脚本
@@ -194,6 +196,12 @@ python skills/fund-deep-research/scripts/precheck.py 003984
 ```
 NEXT_ACTION: FULL_FETCH  # 或 PARTIAL_FETCH / REFRESH_NAV / SKIP_TO_STEP2
 ```
+
+执行规则：
+- `FULL_FETCH`：运行并行脚本，一次性拉齐11个文件。
+- `PARTIAL_FETCH`：只补跑预检点名的缺失脚本，不要全量重跑。
+- `REFRESH_NAV`：只刷新 `nav_daily.json` 和 `fund_enhanced.json`，若预检同时提示缺文件，再补对应脚本。
+- `SKIP_TO_STEP2`：直接进入完整性检查。
 
 ## 📊 输出示例
 
@@ -261,7 +269,7 @@ NEXT_ACTION: FULL_FETCH  # 或 PARTIAL_FETCH / REFRESH_NAV / SKIP_TO_STEP2
 3. **基金发展历史**（30+拐点三线叙事）
 4. **基金经理深度分析**（在管统计、疲劳预警、言行一致性）
 5. **基金公司合规评估**（一票否决检查）
-6. **持仓分析**（行业分布、集中度、季度演变）
+6. **持仓分析**（行业分布、集中度、全量逐季表 + 关键调仓解读）
 7. **风险指标**（13项传统指标 + 6项相对基准指标）
 8. **行业与政策背景**（政策文件及文号、红利期判断）
 9. **历史业绩分析**（阶段业绩、年度收益、季度收益）
@@ -359,7 +367,7 @@ pip install akshare
 ### 问题4：经理学历信息为空
 **解决**：
 - 这是已知限制（AKShare不提供学历字段）
-- Step 5H 联网搜索补充："姚志鹏 学历 简历"
+- 在 **Step 5 外部证据采集阶段** 联网搜索补充："姚志鹏 学历 简历"
 - 约60%的情况下需要从网页抓取或联网搜索获取
 
 ### 问题5：报告生成失败
@@ -367,7 +375,7 @@ pip install akshare
 - 检查是否有写入权限
 - 确认输出目录 `基金研究报告/` 存在
 - 查看详细错误日志
-- 确认已完成 Step 0-5 的所有步骤
+- 确认已完成 Step 0、Step 1、Step 2、Step 3、Step 4.5、Step 5、Step 5.5，并按 Step 6 的预声明-批量读取协议生成正文
 
 ## 📚 相关文档
 
@@ -390,9 +398,12 @@ pip install akshare
 
 **初始状态**：脚本自动覆盖率68%  
 **处理过程**：
+- Step 0: 先运行 precheck.py，确认 `NEXT_ACTION=FULL_FETCH`
 - Step 1: 13秒获取11个JSON文件
 - Step 3: 2轮基础数据补充
-- Step 5: 60-130轮深度搜索（季报原文、政策文件、拐点归因）
+- Step 4.5: 装载研究输入骨架（拐点、季度、年度、相对基准指标）
+- Step 5: 外部证据采集与验证（季报原文、政策文件、拐点归因）
+- Step 5.5: 将证据沉淀为章节可直接消费的 summary 标签
 - Step 6: AI逐章生成报告
 
 **最终成果**：
