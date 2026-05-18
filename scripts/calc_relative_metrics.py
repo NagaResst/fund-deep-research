@@ -12,6 +12,7 @@ import time
 import akshare as ak
 import pandas as pd
 import numpy as np
+import requests
 from datetime import datetime
 from typing import Dict, List, Optional
 
@@ -68,6 +69,75 @@ def _load_nav_from_tmp(fund_code: str) -> pd.DataFrame:
         return pd.DataFrame(columns=['date', 'nav'])
 
 
+def _fetch_eastmoney_index_kline(benchmark_code: str) -> pd.DataFrame:
+    """使用东财历史 K 线接口兜底获取指数日线。"""
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Referer': 'https://quote.eastmoney.com/',
+        'Connection': 'close',
+    }
+    endpoints = [
+        'https://push2his.eastmoney.com/api/qt/stock/kline/get',
+        'https://91.push2his.eastmoney.com/api/qt/stock/kline/get',
+        'https://60.push2his.eastmoney.com/api/qt/stock/kline/get',
+    ]
+
+    secid_candidates = [f'1.{benchmark_code}', f'0.{benchmark_code}', f'2.{benchmark_code}']
+    if benchmark_code == '000300':
+        secid_candidates = ['1.000300', '0.399300'] + secid_candidates
+    last_error = None
+
+    for endpoint in endpoints:
+        for secid in secid_candidates:
+            for attempt in range(3):
+                try:
+                    response = requests.get(
+                        endpoint,
+                        headers=headers,
+                        params={
+                            'secid': secid,
+                            'fields1': 'f1,f2,f3,f4,f5,f6',
+                            'fields2': 'f51,f52,f53,f54,f55,f56,f57,f58',
+                            'klt': '101',
+                            'fqt': '0',
+                            'beg': '19900101',
+                            'end': '20500101',
+                            'ut': 'fa5fd1943c7b386f172d6893dbfba10b',
+                            'lmt': '100000',
+                        },
+                        timeout=15,
+                    )
+                    response.raise_for_status()
+                    payload = response.json()
+                    klines = ((payload or {}).get('data') or {}).get('klines') or []
+                    if not klines:
+                        raise ValueError(f'东财返回空数据: secid={secid}')
+
+                    rows = []
+                    for item in klines:
+                        parts = item.split(',')
+                        if len(parts) < 3:
+                            continue
+                        rows.append({'date': parts[0], 'price': parts[2]})
+
+                    benchmark_df = pd.DataFrame(rows)
+                    if benchmark_df.empty:
+                        raise ValueError(f'东财数据解析为空: secid={secid}')
+
+                    benchmark_df['date'] = pd.to_datetime(benchmark_df['date'])
+                    benchmark_df['price'] = pd.to_numeric(benchmark_df['price'], errors='coerce')
+                    benchmark_df = benchmark_df[['date', 'price']].dropna().sort_values('date').reset_index(drop=True)
+                    if benchmark_df.empty:
+                        raise ValueError(f'东财数据清洗后为空: secid={secid}')
+                    return benchmark_df
+                except Exception as e:
+                    last_error = e
+                    if attempt < 2:
+                        time.sleep(1)
+
+    raise ValueError(f'东财历史 K 线接口失败: {last_error}')
+
+
 def _fetch_benchmark_with_freshness_check(benchmark_code: str, target_end_date: pd.Timestamp) -> tuple[pd.DataFrame, str]:
     """获取最新基准数据，并拒绝明显过期的数据源。"""
 
@@ -102,6 +172,7 @@ def _fetch_benchmark_with_freshness_check(benchmark_code: str, target_end_date: 
         ("akshare_stock_zh_index_daily", lambda: ak.stock_zh_index_daily(symbol=sina_symbol), 3),
         ("akshare_index_zh_a_hist", lambda: ak.index_zh_a_hist(symbol=benchmark_code, period="daily"), 1),
         ("akshare_stock_zh_index_hist_csindex", lambda: ak.stock_zh_index_hist_csindex(symbol=benchmark_code), 1),
+        ("eastmoney_index_kline", lambda: _fetch_eastmoney_index_kline(benchmark_code), 1),
     ]
 
     last_error = None
