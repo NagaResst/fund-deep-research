@@ -564,18 +564,18 @@ read_file /tmp/fund_research_{code}/raw/inflection_points.json
 > ❌ **禁止**：读了部分文件就开始写，剩余文件"待会再读"  
 > ✅ **正确顺序**：声明 → 全部读完 → 确认 → 写章节
 
-| 生成顺序 | 章节 | 预声明并批量读取的文件（全部读完后再开始写） |
-|---------|------|----------------------------------------|
-| 1 | **第一章** 基金基本信息 | `raw/fund_enhanced.json` (含风险等级、赎回费规则) · `raw/manager_info.json` (含在管基金统计) |
-| 2 | **第三章** 基金发展历史 | `raw/inflection_points.json` · `search_log.md`（grep `[Step5-HistorySummary]` 段） |
-| 3 | **第四章** 基金经理深度分析 | `raw/manager_info.json` (含AKShare获取的在管数据) · `search_log.md`（grep `[Step5-QuarterlyQuote]` `[Step5-ManagerAudit]` 段） |
+| 生成顺序 | 章节               | 预声明并批量读取的文件（全部读完后再开始写）                                                                                              |
+| ---- | ---------------- | ------------------------------------------------------------------------------------------------------------------- |
+| 1    | **第一章** 基金基本信息   | `raw/fund_enhanced.json` (含风险等级、赎回费规则) · `raw/manager_info.json` (含在管基金统计)                                          |
+| 2    | **第三章** 基金发展历史   | `raw/inflection_points.json` · `search_log.md`（grep `[Step5-HistorySummary]` 段）                                     |
+| 3    | **第四章** 基金经理深度分析 | `raw/manager_info.json` (含AKShare获取的在管数据) · `search_log.md`（grep `[Step5-QuarterlyQuote]` `[Step5-ManagerAudit]` 段） |
 
 > **第四章强制写作要求**（未满足则章节不合格）：
 > 1. **4.2 节**：必须逐行列出经理名下**所有**在管基金（来自 `manager_info.json`），包含代码、任期、总回报、同类排名
 > 2. **4.4 节**：必须引用**至少2个季度的季报原始文字**（来自 `search_log.md` 中 `[Step5-QuarterlyQuote]` 段），每条对照实际持仓，给出 ✅⚠️❌ 判断
 > 3. **4.3 节**：必须明确写出仓位管理风格（如"全程高仓位约90%+"或"主动择时"），并说明对回撤的影响
 > 4. **4.6 节**：必须输出4维能力画像：最强能力、明显短板、适合配置的市场环境、应规避的市场环境
-> 5. 若 `manager_identity_conflict == true`，必须在 4.1 或 4.5 节显式说明：当前经理认定以 `tenure_history` 为准，并解释顶层字段为何只作辅助参考
+> 5. 若 `manager_identity_conflict == true`，必须在 4.1 或 4.5 节显式说明：当前经理认定以 `tenure_history` 为准，并解释顶层字段为何只作辅助参考 |
 | 4 | **第五章** 基金公司合规评估 | `raw/institutional_risk.json` · `raw/blacklist.json` · `search_log.md`（grep `[Step5-Compliance]` `[Step5-ComplianceSummary]` 段） |
 | 5 | **第六章** 持仓分析 | `raw/holdings.json` |
 | 6 | **第七章** 风险指标 | `raw/risk_metrics.json` · `raw/relative_metrics.json` (新增: Beta/Alpha等) |
@@ -593,7 +593,7 @@ read_file /tmp/fund_research_{code}/raw/inflection_points.json
 > **第六章（6.3 持仓演变）**：
 > - **输出必须分两层：先给“全量逐季表”，再给“关键调仓解读”**
 > - **全量逐季表的覆盖范围：`holdings.json` 中 `holdings_by_period` 的所有季度，从成立首季到最新季报，逐季全部列出，不得截断为"近六期"**
-> - 禁止列出当期重仓股名称，仅记录调整本身（新进↑ / 退出↓ / 加仓⬆ / 减仓⬇）
+> - 禁止列出当期重仓股名称，仅记录调整本身（新进↑ / 退出↓）
 > - 若历史季度可可靠识别行业/产业链，则新增「行业调整（产业链位置移动）」列；若 `holdings.json` 不提供历史行业字段，允许基于标的主营业务人工归类，并注明“基于标的主营业务归类”；若仍无法可靠归类，明确写“历史行业穿透数据缺失”，不得编造
 > - 必须新增「前十集中度」列和「当季净值涨跌」列
 > - 全量逐季表中的备注/评价列遵循“**有则写、无则 `—`**”原则：只记录真正值得保留的变化或事件，语言必须简明，不得对每个季度机械输出评价
@@ -620,6 +620,7 @@ read_file /tmp/fund_research_{code}/raw/inflection_points.json
 > read_file skills/fund-deep-research/reference/report-template.md
 > ```
 > 全部加载完毕后，先核对章节标题与小节顺序完全一致，再按模板骨架逐章填写。
+> 注意第二章的位置，尽管最后生成，但应置于第一章和第三章中间。
 
 ---
 
