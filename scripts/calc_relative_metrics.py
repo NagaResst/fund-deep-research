@@ -138,6 +138,73 @@ def _fetch_eastmoney_index_kline(benchmark_code: str) -> pd.DataFrame:
     raise ValueError(f'东财历史 K 线接口失败: {last_error}')
 
 
+def _fetch_tencent_index_kline(benchmark_code: str) -> pd.DataFrame:
+    """使用腾讯行情接口兜底获取指数日线。"""
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Referer': 'https://gu.qq.com/',
+        'Connection': 'close',
+    }
+
+    if benchmark_code == '000300':
+        symbol_candidates = ['sh000300', 'sz399300']
+    elif benchmark_code.startswith('399'):
+        symbol_candidates = [f'sz{benchmark_code}']
+    else:
+        symbol_candidates = [f'sh{benchmark_code}', f'sz{benchmark_code}']
+
+    requests.packages.urllib3.disable_warnings()
+    last_error = None
+    for symbol in dict.fromkeys(symbol_candidates):
+        for attempt in range(3):
+            try:
+                response = requests.get(
+                    'https://proxy.finance.qq.com/ifzqgtimg/appstock/app/newfqkline/get',
+                    headers=headers,
+                    params={
+                        '_var': 'kline_dayqfq',
+                        'param': f'{symbol},day,2005-01-01,2030-12-31,1200,qfq',
+                        'r': f'{time.time():.6f}',
+                    },
+                    timeout=15,
+                    verify=False,
+                )
+                response.raise_for_status()
+
+                payload_text = response.text.strip()
+                if '=' in payload_text:
+                    payload_text = payload_text.split('=', 1)[1]
+                payload_text = payload_text.rstrip(';')
+                payload = json.loads(payload_text)
+
+                day_data = (((payload or {}).get('data') or {}).get(symbol) or {}).get('day') or []
+                if not day_data:
+                    raise ValueError(f'腾讯返回空数据: symbol={symbol}')
+
+                rows = []
+                for item in day_data:
+                    if not isinstance(item, list) or len(item) < 3:
+                        continue
+                    rows.append({'date': item[0], 'price': item[2]})
+
+                benchmark_df = pd.DataFrame(rows)
+                if benchmark_df.empty:
+                    raise ValueError(f'腾讯数据解析为空: symbol={symbol}')
+
+                benchmark_df['date'] = pd.to_datetime(benchmark_df['date'])
+                benchmark_df['price'] = pd.to_numeric(benchmark_df['price'], errors='coerce')
+                benchmark_df = benchmark_df[['date', 'price']].dropna().sort_values('date').reset_index(drop=True)
+                if benchmark_df.empty:
+                    raise ValueError(f'腾讯数据清洗后为空: symbol={symbol}')
+                return benchmark_df
+            except Exception as e:
+                last_error = e
+                if attempt < 2:
+                    time.sleep(1)
+
+    raise ValueError(f'腾讯历史 K 线接口失败: {last_error}')
+
+
 def _fetch_benchmark_with_freshness_check(benchmark_code: str, target_end_date: pd.Timestamp) -> tuple[pd.DataFrame, str]:
     """获取最新基准数据，并拒绝明显过期的数据源。"""
 
@@ -170,6 +237,7 @@ def _fetch_benchmark_with_freshness_check(benchmark_code: str, target_end_date: 
     sina_symbol = 'sh000300' if benchmark_code == '000300' else benchmark_code
     fetchers = [
         ("akshare_stock_zh_index_daily", lambda: ak.stock_zh_index_daily(symbol=sina_symbol), 3),
+        ("tencent_index_kline", lambda: _fetch_tencent_index_kline(benchmark_code), 1),
         ("akshare_index_zh_a_hist", lambda: ak.index_zh_a_hist(symbol=benchmark_code, period="daily"), 1),
         ("akshare_stock_zh_index_hist_csindex", lambda: ak.stock_zh_index_hist_csindex(symbol=benchmark_code), 1),
         ("eastmoney_index_kline", lambda: _fetch_eastmoney_index_kline(benchmark_code), 1),
