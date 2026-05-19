@@ -24,6 +24,7 @@ REFRESH_BY_DEFAULT_PREFIXES = (
     "exclusionCheck",
     "scoring",
     "tracking",
+    "company",
     "stageAnalysis.stages",
     "stageAnalysis.inflectionPoints",
     "managers.current.education",
@@ -474,6 +475,47 @@ def normalize_policy(policy):
     return normalized
 
 
+def normalize_company(company):
+    if not isinstance(company, dict):
+        return company
+
+    normalized = dict(company)
+    name = normalized.get("name")
+    if name and not normalized.get("shortName"):
+        short_name = str(name)
+        short_name = short_name.replace("基金管理有限责任公司", "基金")
+        short_name = short_name.replace("基金管理有限公司", "基金")
+        short_name = short_name.replace("基金有限公司", "基金")
+        normalized["shortName"] = short_name
+
+    checks = normalized.get("complianceChecks")
+    if isinstance(checks, list):
+        normalized_checks = []
+        for item in checks:
+            if not isinstance(item, dict):
+                continue
+            result = str(item.get("result") or "").strip().lower()
+            passed = item.get("pass")
+            warned = item.get("warn")
+            if passed is None:
+                passed = result in {"pass", "通过", "ok", "正常"}
+            if warned is None:
+                warned = result in {"warn", "warning", "预警", "风险", "存在风险", "未检出"}
+            normalized_checks.append({
+                "item": item.get("item"),
+                "pass": bool(passed),
+                "warn": bool(warned),
+                "detail": item.get("detail") or item.get("note") or "",
+            })
+        normalized["complianceChecks"] = normalized_checks
+
+        if not normalized.get("complianceResult"):
+            has_hard_risk = any((not item["pass"]) and (not item["warn"]) for item in normalized_checks)
+            normalized["complianceResult"] = "风险" if has_hard_risk else "通过"
+
+    return normalized
+
+
 def normalize_b_fields(patch, fund_code=None):
     """
     规范化B类字段，确保必需字段存在。
@@ -514,6 +556,9 @@ def normalize_b_fields(patch, fund_code=None):
 
     if "policy" in normalized:
         normalized["policy"] = normalize_policy(normalized["policy"])
+
+    if "company" in normalized:
+        normalized["company"] = normalize_company(normalized["company"])
 
     return normalized
 

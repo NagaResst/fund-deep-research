@@ -12,7 +12,8 @@
 4. managers.current.philosophy 必须是数组
 5. holdings.themeGroups 必须是数组
 6. performance.milestones 必须是数组
-7. 其他关键数组字段的类型检查
+7. company 必须是对象，且包含 complianceChecks
+8. 其他关键数组字段的类型检查
 """
 
 import json
@@ -214,6 +215,49 @@ def validate_policy(data):
     return True, "policy 格式正确"
 
 
+def validate_company(data):
+    """验证 company 字段"""
+    company = data.get('company')
+
+    if company is None:
+        return False, "company 字段缺失"
+
+    if not isinstance(company, dict):
+        return False, f"company 应为对象，实际为 {type(company).__name__}"
+
+    if company.get('complianceResult') is None:
+        return False, "company.complianceResult 字段缺失"
+
+    if company.get('complianceSummary') is None:
+        return False, "company.complianceSummary 字段缺失"
+
+    checks = company.get('complianceChecks')
+    if checks is None:
+        return False, "company.complianceChecks 字段缺失"
+    if not isinstance(checks, list):
+        return False, f"company.complianceChecks 应为数组，实际为 {type(checks).__name__}"
+    if len(checks) == 0:
+        return False, "company.complianceChecks 数组为空"
+
+    for i, item in enumerate(checks):
+        if not isinstance(item, dict):
+            return False, f"company.complianceChecks[{i}] 应为对象，实际为 {type(item).__name__}"
+        if 'item' not in item:
+            return False, f"company.complianceChecks[{i}] 缺少 'item' 字段"
+        if 'detail' not in item:
+            return False, f"company.complianceChecks[{i}] 缺少 'detail' 字段"
+        if 'pass' not in item:
+            return False, f"company.complianceChecks[{i}] 缺少 'pass' 字段"
+        if 'warn' not in item:
+            return False, f"company.complianceChecks[{i}] 缺少 'warn' 字段"
+        if not isinstance(item['pass'], bool):
+            return False, f"company.complianceChecks[{i}].pass 应为布尔值，实际为 {type(item['pass']).__name__}"
+        if not isinstance(item['warn'], bool):
+            return False, f"company.complianceChecks[{i}].warn 应为布尔值，实际为 {type(item['warn']).__name__}"
+
+    return True, f"company 格式正确（{len(checks)}个检查项）"
+
+
 def main():
     if len(sys.argv) != 2:
         print("用法: python3 validate_json_schema.py <基金代码>")
@@ -236,6 +280,7 @@ def main():
         ("performance", validate_performance),
         ("tracking", validate_tracking),
         ("policy", validate_policy),
+        ("company", validate_company),
     ]
     
     results = []
