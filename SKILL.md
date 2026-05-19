@@ -631,6 +631,7 @@ read_file /tmp/fund_research_{code}/raw/inflection_points.json
 > read_file skills/fund-deep-research/reference/scoring-matrix.md
 > ```
 > 按基金类型选择对应矩阵，三轴交叉得出五档建议。
+> 费率口径以评分矩阵为准：收益类指标按费后结果理解，费率单独评估，不与收益简单对冲。
 
 **第二章落笔前的强制判断（所有类型都要先做，尤其不能漏掉债券型）**：
 - 先明确基金主类型与子类型：**主动权益宽基 / 主动行业主题 / 被动宽基指数 / 被动行业主题指数 / Smart Beta风格指数 / 指数增强 / 纯债 / 一级债 / 二级债 / 固收+**。
